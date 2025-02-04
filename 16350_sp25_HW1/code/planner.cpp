@@ -14,6 +14,7 @@ g++ -std=c++17 runtest.cpp planner.cpp
 #include <iostream>
 #include <queue>
 #include <vector>
+#include <map>
 
 #define GETMAPINDEX(X, Y, XSIZE, YSIZE) ((Y-1)*XSIZE + (X-1))
 
@@ -83,16 +84,27 @@ void planner(
         std::greater<std::pair<double, std::pair<int, int>>>
     > OPEN;
 
-    // Initialize Closed
-    std::vector<std::pair<int, int>> CLOSED;
+    // g-score 
+    std::map<std::pair<int, int>, double> g_score;
+    // immediate action
+    std::map<std::pair<int, int>, std::pair<int, int>> step;
 
+    // current cell g-score: 0, h = euclidean_heuristic(robotposeX, robotposeY, goalposeX, goalposeY)
+    g_score[std::make_pair(robotposeX, robotposeY)] = 0;
+    double h = euclidean_heuristic(robotposeX, robotposeY, goalposeX, goalposeY);
+    OPEN.push(std::make_pair(h, std::make_pair(robotposeX, robotposeY)));
 
-    // Edge case where start is invalid
-    if (map[GETMAPINDEX(robotposeX, robotposeY, x_size, y_size)] >= collision_thresh) {
-        // stay in place
-        action_ptr[0] = robotposeX;
-        action_ptr[1] = robotposeY;
-        return;
+    while (OPEN.size() > 0) {
+        auto current = OPEN.top().second;
+        OPEN.pop();
+
+        // base case: if on goal trajectory
+        if (current.first == goalposeX && current.second == goalposeY) {
+            action_ptr[0] = step[current].first;
+            action_ptr[1] = step[current].second;
+            return;
+        }
+         
     }
 
     // evalue 8 neighbor grids
