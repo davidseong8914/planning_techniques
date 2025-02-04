@@ -54,6 +54,55 @@ bool isInClosed(int x, int y, std::vector<std::pair<int, int>> CLOSED) {
     return false;
 }
 
+// input target grid coordinate, outputs backward A* heuristic map
+std::map<std::pair<int, int>, double> heuristic_map(
+    int* map,
+    int collision_thresh,
+    int x_size,
+    int y_size,
+    int targetX,
+    int targetY
+) {
+    // initialize heuristic map
+    std::map<std::pair<int, int>, double> heuristic_map;
+
+    std::priority_queue<
+        std::pair<double, std::pair<int, int>>,
+        std::vector<std::pair<double, std::pair<int, int>>>,
+        std::greater<std::pair<double, std::pair<int, int>>>
+    > OPEN;
+
+    std::vector<std::pair<int, int>> CLOSED;
+
+    heuristic_map[{targetX, targetY}] = 0;
+    OPEN.push(std::make_pair(0, std::make_pair(targetX, targetY)));
+
+    // 8-connected grid
+    int dX[NUMOFDIRS] = {-1, -1, -1,  0,  0,  1, 1, 1};
+    int dY[NUMOFDIRS] = {-1,  0,  1, -1,  1, -1, 0, 1};
+
+    while (OPEN.size() > 0) {
+        auto current = OPEN.top().second; // grid coordinates of smallest g-score
+        double current_g = OPEN.top().first; // g-score of current grid
+        OPEN.pop(); // smallest g-score grid removed from OPEN
+
+        // check neighbor grids / expansion step
+        for(int i = 0; i <NUMOFDIRS; i++) {
+            int newx = current.first + dX[i];
+            int newy = current.second + dY[i];
+
+            if (gridValid(newx, newy, x_size, y_size, map, collision_thresh) && !isInClosed(newx, newy, CLOSED)) {
+                double newg = current_g + 1;
+                OPEN.push(std::make_pair(newg, std::make_pair(newx, newy)));
+                heuristic_map[{newx, newy}] = newg;
+                CLOSED.push_back(std::make_pair(newx, newy));
+            }
+        }
+    }
+
+    return heuristic_map;
+}
+
 void planner(
     int* map,
 
@@ -73,70 +122,51 @@ void planner(
     // 8-connected grid
     int dX[NUMOFDIRS] = {-1, -1, -1,  0,  0,  1, 1, 1};
     int dY[NUMOFDIRS] = {-1,  0,  1, -1,  1, -1, 0, 1};
-    
+    // current target position
     int goalposeX = target_traj[curr_time-1];
     int goalposeY = target_traj[curr_time-1 + target_steps];
 
-    // Initialize OPEN
+    // if goal trajectory is reached
+    if (robotposeX == goalposeX && robotposeY == goalposeY) {
+        action_ptr[0] = robotposeX;
+        action_ptr[1] = robotposeY;
+        return;
+    }
+
+    // Initialize backward A* heuristic map
+    std::map<std::pair<int, int>, double> h_map = heuristic_map(map, collision_thresh, x_size, y_size, goalposeX, goalposeY);
+    // current position
+    std::pair<int, int> current = std::make_pair(robotposeX, robotposeY);
+    // OPEN (considers 8 neighbors)
     std::priority_queue<
         std::pair<double, std::pair<int, int>>,
         std::vector<std::pair<double, std::pair<int, int>>>,
         std::greater<std::pair<double, std::pair<int, int>>>
     > OPEN;
 
-    // g-score 
-    std::map<std::pair<int, int>, double> g_score;
-    // immediate action
-    std::map<std::pair<int, int>, std::pair<int, int>> step;
-
-    // current cell g-score: 0, h = euclidean_heuristic(robotposeX, robotposeY, goalposeX, goalposeY)
-    g_score[std::make_pair(robotposeX, robotposeY)] = 0;
-    double h = euclidean_heuristic(robotposeX, robotposeY, goalposeX, goalposeY);
-    OPEN.push(std::make_pair(h, std::make_pair(robotposeX, robotposeY)));
-
-    while (OPEN.size() > 0) {
-        auto current = OPEN.top().second;
-        OPEN.pop();
-
-        // base case: if on goal trajectory
-        if (current.first == goalposeX && current.second == goalposeY) {
-            action_ptr[0] = step[current].first;
-            action_ptr[1] = step[current].second;
-            return;
-        }
-         
-    }
-
-    // evalue 8 neighbor grids
+    // evaluate 8 neighbor grids
     for (int i = 0; i < NUMOFDIRS; i++) {
-        int newx = robotposeX + dX[i];
-        int newy = robotposeY + dY[i];
-        
-        if (gridValid(newx, newy, x_size, y_size, map, collision_thresh) && !isInClosed(newx, newy, CLOSED)) {
-            double f = map[GETMAPINDEX(newx, newy, x_size, y_size)] + 
-                      euclidean_heuristic(newx, newy, goalposeX, goalposeY);
-                    //   std::cout<<f << std::endl;
-            OPEN.push(std::make_pair(f, std::make_pair(newx, newy)));
-            std::cout << "OPEN: " << newx << ", " << newy << " " << euclidean_heuristic(newx, newy, goalposeX, goalposeY) << std::endl;
+        int newx = current.first + dX[i];
+        int newy = current.second + dY[i];
 
+        if (gridValid(newx, newy, x_size, y_size, map, collision_thresh)) {
+            double h = h_map[{newx, newy}];
+            // double g = ?
+            // double f = g + h
+            OPEN.push(std::make_pair(h, std::make_pair(newx, newy)));
+            std::cout << "(" << newx << "," << newy << ") " << h << std::endl;
         }
     }
 
-    // if on trajectory
-    if (robotposeX == targetposeX && robotposeY == targetposeY) {
-        action_ptr[0] = targetposeX;
-        action_ptr[1] = targetposeY;
-        return;
-    } else {
-        // Take the best neighbor
-        action_ptr[0] = OPEN.top().second.first;
-        action_ptr[1] = OPEN.top().second.second;
-    }
+    std::pair<int, int> next = OPEN.top().second;
+    action_ptr[0] = next.first;
+    action_ptr[1] = next.second;
 
-    std::cout << "action_ptr: " << action_ptr[0] << ", " << action_ptr[1] << std::endl;
-    CLOSED.push_back(std::make_pair(action_ptr[0], action_ptr[1]));
-
-
+    std::cout << "Current: (" << robotposeX << "," << robotposeY 
+              << ") Next: (" << action_ptr[0] << "," << action_ptr[1] 
+              << ") Goal: (" << goalposeX << "," << goalposeY << ")" << std::endl;
     return;
 }
+
+
 
