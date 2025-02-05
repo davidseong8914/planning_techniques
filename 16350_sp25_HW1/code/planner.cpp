@@ -15,8 +15,9 @@ g++ -std=c++17 runtest.cpp planner.cpp
 #include <queue>
 #include <vector>
 #include <map>
+#include <set>
 
-#define GETMAPINDEX(X, Y, XSIZE, YSIZE) ((Y-1)*XSIZE + (X-1))
+#define GETMAPINDEX(X, Y, XSIZE, YSIZE) (Y*XSIZE + X)
 
 #if !defined(MAX)
 #define	MAX(A, B)	((A) > (B) ? (A) : (B))
@@ -63,8 +64,8 @@ std::map<std::pair<int, int>, double> heuristic_map(
     int targetX,
     int targetY
 ) {
-    // initialize heuristic map
-    std::map<std::pair<int, int>, double> heuristic_map;
+    std::map<std::pair<int, int>, double> distances;
+    std::set<std::pair<int, int>> visited;  // Replace vector with set for O(log n) lookup
 
     std::priority_queue<
         std::pair<double, std::pair<int, int>>,
@@ -72,40 +73,45 @@ std::map<std::pair<int, int>, double> heuristic_map(
         std::greater<std::pair<double, std::pair<int, int>>>
     > OPEN;
 
-    std::vector<std::pair<int, int>> CLOSED;
+    // Initialize with target
+    distances[{targetX, targetY}] = 0;
+    OPEN.push({0, {targetX, targetY}});
 
-    heuristic_map[{targetX, targetY}] = 0;
-    OPEN.push(std::make_pair(0, std::make_pair(targetX, targetY)));
-
-    // 8-connected grid
     int dX[NUMOFDIRS] = {-1, -1, -1,  0,  0,  1, 1, 1};
     int dY[NUMOFDIRS] = {-1,  0,  1, -1,  1, -1, 0, 1};
 
-    while (OPEN.size() > 0) {
-        auto current = OPEN.top().second; // grid coordinates of smallest g-score
-        double current_g = OPEN.top().first; // g-score of current grid
-        OPEN.pop(); // smallest g-score grid removed from OPEN
+    while (!OPEN.empty()) {
+        auto current = OPEN.top().second;
+        double current_g = OPEN.top().first;
+        OPEN.pop();
 
-        // check neighbor grids / expansion step
-        for(int i = 0; i <NUMOFDIRS; i++) {
+        // Skip if we've already found a better path to this node
+        if (visited.count(current) > 0) continue;
+        visited.insert(current);
+
+        for(int i = 0; i < NUMOFDIRS; i++) {
             int newx = current.first + dX[i];
             int newy = current.second + dY[i];
+            std::pair<int, int> neighbor = {newx, newy};
 
-            if (gridValid(newx, newy, x_size, y_size, map, collision_thresh) && !isInClosed(newx, newy, CLOSED)) {
+            if (gridValid(newx, newy, x_size, y_size, map, collision_thresh) && 
+                visited.count(neighbor) == 0) {
                 double newg = current_g + 1;
-                OPEN.push(std::make_pair(newg, std::make_pair(newx, newy)));
-                heuristic_map[{newx, newy}] = newg;
-                CLOSED.push_back(std::make_pair(newx, newy));
+                
+                // Only add if we found a better path
+                if (distances.count(neighbor) == 0 || newg < distances[neighbor]) {
+                    distances[neighbor] = newg;
+                    OPEN.push({newg, neighbor});
+                }
             }
         }
     }
 
-    return heuristic_map;
+    return distances;
 }
 
 void planner(
     int* map,
-
     int collision_thresh,
     int x_size,
     int y_size,
@@ -150,12 +156,24 @@ void planner(
         int newy = current.second + dY[i];
 
         if (gridValid(newx, newy, x_size, y_size, map, collision_thresh)) {
-            double h = h_map[{newx, newy}];
-            // double g = ?
-            // double f = g + h
-            OPEN.push(std::make_pair(h, std::make_pair(newx, newy)));
-            std::cout << "(" << newx << "," << newy << ") " << h << std::endl;
+            // Safely access h_map
+            auto it = h_map.find({newx, newy});
+            if (it != h_map.end()) {
+                double h = it->second;
+                double g = map[GETMAPINDEX(newx, newy, x_size, y_size)];
+                double f = g + h;
+                OPEN.push(std::make_pair(f, std::make_pair(newx, newy)));
+                std::cout << "(" << newx << "," << newy << ") f=" << f 
+                         << " (g=" << g << ", h=" << h << ")" << std::endl;
+            }
         }
+    }
+
+    // Check for empty queue
+    if (OPEN.empty()) {
+        action_ptr[0] = robotposeX;
+        action_ptr[1] = robotposeY;
+        return;
     }
 
     std::pair<int, int> next = OPEN.top().second;
