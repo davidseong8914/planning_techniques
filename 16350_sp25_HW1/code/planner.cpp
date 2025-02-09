@@ -56,6 +56,8 @@ bool isInClosed(int x, int y, std::vector<std::pair<int, int>> CLOSED) {
 }
 
 // input target grid coordinate, outputs backward A* heuristic map
+// start from the target, expand in all directions until s_start is found
+// if s_start found, move to that grid
 std::map<std::pair<int, int>, double> heuristic_map(
     int* map,
     int collision_thresh,
@@ -74,42 +76,50 @@ std::map<std::pair<int, int>, double> heuristic_map(
     > OPEN;
 
     // Initialize with target
-    distances[{targetX, targetY}] = 0;
-    OPEN.push({0, {targetX, targetY}});
+    distances[{targetX, targetY}] = 0; // coordinates, coordinates
+    visited.insert({targetX, targetY}); // visited coordinates
+    OPEN.push({0, {targetX, targetY}}); // Open set > used for A* expansion
 
     int dX[NUMOFDIRS] = {-1, -1, -1,  0,  0,  1, 1, 1};
     int dY[NUMOFDIRS] = {-1,  0,  1, -1,  1, -1, 0, 1};
 
     while (!OPEN.empty()) {
-        auto current = OPEN.top().second;
-        double current_g = OPEN.top().first;
+        auto current = OPEN.top().second; // current coordinates
+        double current_g = OPEN.top().first; // current g value
         OPEN.pop();
 
-        // Skip if we've already found a better path to this node
-        if (visited.count(current) > 0) continue;
-        visited.insert(current);
+        // cell already visited
+        if (visited.count(current) > 0) {
+            continue; 
+        }
+        else {
+            visited.insert(current);
+        }
 
+        // checks neighboring grids
         for(int i = 0; i < NUMOFDIRS; i++) {
             int newx = current.first + dX[i];
             int newy = current.second + dY[i];
             std::pair<int, int> neighbor = {newx, newy};
 
+            // checks if grid is valid and not visited
             if (gridValid(newx, newy, x_size, y_size, map, collision_thresh) && 
                 visited.count(neighbor) == 0) {
-                double newg = current_g + 1;
                 
-                // Only add if we found a better path
-                if (distances.count(neighbor) == 0 || newg < distances[neighbor]) {
-                    distances[neighbor] = newg;
-                    OPEN.push({newg, neighbor});
-                }
+                // g value of neighbor
+                double newg = current_g + 1;
+                distances[neighbor] = newg;
+                OPEN.push({newg, neighbor});
             }
         }
     }
 
-    return distances;
+    return distances; // returns map of coordinates, distances
 }
 
+
+// expand using heuristic map
+// if on robot trajectory, follow trajectory backwards
 void planner(
     int* map,
     int collision_thresh,
