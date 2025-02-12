@@ -10,7 +10,6 @@ g++ -std=c++17 runtest.cpp planner.cpp
 ./a.out undergrad/map5.txt
 python visualize.py undergrad/map5.txt
 
-2 heuristics?
 right now catches but doesn't move backwards in trajectory
 */
 
@@ -72,7 +71,9 @@ std::map<std::pair<int, int>, double> heuristic_map(
     int targetX,
     int targetY,
     int robotposeX,
-    int robotposeY
+    int robotposeY,
+    int* target_traj,
+    int target_steps
 ) {
     std::map<std::pair<int, int>, double> distances;
     std::set<std::pair<int, int>> visited;
@@ -83,16 +84,42 @@ std::map<std::pair<int, int>, double> heuristic_map(
         std::greater<std::pair<double, std::pair<int, int>>>
     > OPEN;
 
-    // Initialize with target
-    distances[{targetX, targetY}] = 0;
-    OPEN.push({0, {targetX, targetY}});  // Don't add to visited yet
+    // Find valid target position by backtracking through trajectory
+    int validTargetX = targetX;
+    int validTargetY = targetY;
+    bool foundValid = gridValid(targetX, targetY, x_size, y_size, map, collision_thresh);
+    
+    if (!foundValid) {
+        std::cout << "Target position invalid, searching for valid target..." << std::endl;
+        for (int i = target_steps - 1; i >= 0; i--) {
+            validTargetX = target_traj[i];
+            validTargetY = target_traj[i + target_steps];
+            if (gridValid(validTargetX, validTargetY, x_size, y_size, map, collision_thresh)) {
+                foundValid = true;
+                std::cout << "Found valid target at index " << i << ": (" 
+                         << validTargetX << "," << validTargetY << ")" << std::endl;
+                break;
+            }
+        }
+        
+        if (!foundValid) {
+            std::cout << "Warning: No valid target found in trajectory" << std::endl;
+            // Return empty map if no valid target found
+            return distances;
+        }
+    }
 
+    // Initialize with valid target position
+    distances[{validTargetX, validTargetY}] = 0;
+    OPEN.push({0, {validTargetX, validTargetY}});
+
+    // 8-connected grid
     int dX[NUMOFDIRS] = {-1, -1, -1,  0,  0,  1, 1, 1};
     int dY[NUMOFDIRS] = {-1,  0,  1, -1,  1, -1, 0, 1};
 
     while (!OPEN.empty()) {
         auto current = OPEN.top().second;
-        double current_g = distances[current];  // Use stored distance
+        double current_g = distances[current];
         OPEN.pop();
 
         // Skip if already visited
@@ -110,6 +137,7 @@ std::map<std::pair<int, int>, double> heuristic_map(
             // checks if grid is valid and not visited
             if (gridValid(newx, newy, x_size, y_size, map, collision_thresh) && 
                 visited.count(neighbor) == 0) {
+                // std::cout << "Valid grid and not visited" << std::endl;
                 
                 double newg = current_g + 1;
                 
@@ -145,7 +173,7 @@ void planner(
 {
     
     // weighted A*
-    int epsilon = 50000; // with 5 it didn't choose the most optimal path
+    int epsilon = 50; // with 5 it didn't choose the most optimal path
 
     // 8-connected grid
     int dX[NUMOFDIRS] = {-1, -1, -1,  0,  0,  1, 1, 1};
@@ -190,7 +218,7 @@ void planner(
     }
 
     // Initialize backward A* heuristic map
-    std::map<std::pair<int, int>, double> h_map = heuristic_map(map, collision_thresh, x_size, y_size, goalposeX, goalposeY, robotposeX, robotposeY);
+    std::map<std::pair<int, int>, double> h_map = heuristic_map(map, collision_thresh, x_size, y_size, goalposeX, goalposeY, robotposeX, robotposeY, target_traj, target_steps);
     
     std::cout << "Heuristic map size: " << h_map.size() << std::endl;
     std::cout << "Robot position: (" << robotposeX << "," << robotposeY << ")" << std::endl;
@@ -207,13 +235,13 @@ void planner(
     for (int i = 0; i < NUMOFDIRS; i++) {
         int newx = current.first + dX[i];
         int newy = current.second + dY[i];
-        std::cout << "\nChecking neighbor " << i << ": (" << newx << "," << newy << ")" << std::endl;
+        // std::cout << "\nChecking neighbor " << i << ": (" << newx << "," << newy << ")" << std::endl;
         
-        // Skip if we've already visited this position
-        if (visited_positions.count({newx, newy}) > 0) {
-            std::cout << "Skipping previously visited position" << std::endl;
-            continue;
-        }
+        // // Skip if we've already visited this position
+        // if (visited_positions.count({newx, newy}) > 0) {
+        //     std::cout << "Skipping previously visited position" << std::endl;
+        //     continue;
+        // }
         
         bool valid = gridValid(newx, newy, x_size, y_size, map, collision_thresh);
         std::cout << "Grid valid: " << (valid ? "yes" : "no") << std::endl;
@@ -226,7 +254,7 @@ void planner(
                 double h = it->second;
                 double h_euc = euclidean_heuristic(newx, newy, goalposeX, goalposeY); // second heuristic
                 double g = map[GETMAPINDEX(newx, newy, x_size, y_size)];
-                double f = g + h * epsilon + h_euc * epsilon;
+                double f = g + h * epsilon + h_euc * epsilon/2;
                 
                 std::cout << "Values | g: " << g << ", h: " << h << ", f: " << f << ", best_f: " << best_f << std::endl;
                 
@@ -241,7 +269,7 @@ void planner(
         }
     }
 
-    std::cout << "\nFound valid move: " << (found_valid_move ? "yes" : "no") << std::endl;
+    // std::cout << "\nFound valid move: " << (found_valid_move ? "yes" : "no") << std::endl;
     if (found_valid_move) {
         std::cout << "Best next position: (" << best_next.first << "," << best_next.second << ")" << std::endl;
     }
