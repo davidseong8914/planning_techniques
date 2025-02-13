@@ -190,18 +190,45 @@ void planner(
     int dX[NUMOFDIRS] = {-1, -1, -1,  0,  0,  1, 1, 1};
     int dY[NUMOFDIRS] = {-1,  0,  1, -1,  1, -1, 0, 1};
     
-    // set target to end of the target trajectory
-    int goalposeX = target_traj[target_steps-1]; 
-    int goalposeY = target_traj[2*target_steps-1];
 
-    // look 10 steps ahead if not end of target trajectory
-    // int goalposeX = target_traj[std::min(curr_time + 30, target_steps-1)];
-    // int goalposeY = target_traj[std::min(curr_time + 30, 2*target_steps-1)];
+
+    // // set target to end of the target trajectory
+    // int goalposeX = target_traj[target_steps-1]; 
+    // int goalposeY = target_traj[2*target_steps-1];
+
+    // set initial target to 1/3 of the target trajectory
+    static int mode = 1;
+    // Mode reset
+    if (curr_time == 0) {
+        mode = 1;
+    }
+
+    // Calculate current target position based on mode
+    int goalposeX = target_traj[(mode * (target_steps)-1)/4];
+    int goalposeY = target_traj[2*(mode * (target_steps)-1)/4];
+
+    // if distance between current and goal is greater than 
+    if (mode < 4) {
+        int steps_to_target = ((mode * (target_steps-1))/4 - curr_time);
+        double distance_to_target = euclidean_heuristic(robotposeX, robotposeY, goalposeX, goalposeY);
+        
+        if (distance_to_target > steps_to_target * 0.8) {  // 0.6 switching at map7:3, switch at map7:187
+        // maybe use only when trajectory is extremely long
+            mode = std::min(mode + 1, 4);  // Ensure we don't exceed mode 3
+            std::cout << "Moving to next target (mode " << mode << ")" << std::endl;
+            goalposeX = target_traj[(mode * (target_steps)-1)/4];
+            goalposeY = target_traj[2*(mode * (target_steps)-1)/4];
+        }
+    }
+
+
+
 
     static std::set<std::pair<int, int>> visited_positions;
     visited_positions.insert({robotposeX, robotposeY});
     
     // if goal trajectory is reached and within 10 steps
+    std::cout << "goalposeX: " << goalposeX << ", goalposeY: " << goalposeY << std::endl;
     if (robotposeX == goalposeX && robotposeY == goalposeY && (target_steps - curr_time) < 10) {
         std::cout << "On goal trajectory, staying still" << std::endl;
         action_ptr[0] = robotposeX;
@@ -219,10 +246,10 @@ void planner(
             return;
         } 
         else if (robotposeX == target_traj[i] && robotposeY == target_traj[i+target_steps] && (i > curr_time)) {
-                std::cout << "On target trajectory, following backwards" << std::endl;
-                action_ptr[0] = target_traj[i - 1];
-                action_ptr[1] = target_traj[i + target_steps - 1];
-                return;
+            std::cout << "On target trajectory, following backwards" << std::endl;
+            action_ptr[0] = target_traj[i - 1];
+            action_ptr[1] = target_traj[i + target_steps - 1];
+            return;
         }
     }
 
