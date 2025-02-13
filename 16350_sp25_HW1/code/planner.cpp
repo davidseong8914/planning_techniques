@@ -9,8 +9,6 @@ Run command:
 g++ -std=c++17 runtest.cpp planner.cpp
 ./a.out undergrad/map5.txt
 python visualize.py undergrad/map5.txt
-
-right now catches but doesn't move backwards in trajectory
 */
 
 #include "planner.h"
@@ -41,35 +39,25 @@ bool gridValid(int x, int y, int x_size, int y_size, int* map, int collision_thr
         return false;
     }
     
-    // Then check collision (convert to 0-based for array access)
-    int idx = (y-1)*x_size + (x-1);  // Manual index calculation for 1-based coords
+    // Check for collision
+    int idx = (y-1)*x_size + (x-1);  
     if (map[idx] < 0 || map[idx] >= collision_thresh) {
         return false;
     }
-    
     return true;
 }
 
+// euclidean distance for heuristic
 double euclidean_heuristic(int x, int y, int target_x, int target_y) {
     return sqrt((x-target_x)*(x-target_x) + (y-target_y)*(y-target_y));
 }
 
+// check if grid is in closed list
 bool isInClosed(int x, int y, std::set<std::pair<int, int>> CLOSED) {
     return CLOSED.count({x, y}) > 0;
 }
 
-// bool isInClosed(int x, int y, std::vector<std::pair<int, int>> CLOSED) {
-//     for (auto it = CLOSED.begin(); it != CLOSED.end(); it++) {
-//         if (it->first == x && it->second == y) {
-//             return true;
-//         }
-//     }
-//     return false;
-// }
-
-// input target grid coordinate, outputs backward A* heuristic map
-// start from the target, expand in all directions until s_start is found
-// if s_start found, move to that grid
+// input target grid coordinate, outputs backward A* heuristic map (coordinates, Backward A* distance)
 std::map<std::pair<int, int>, double> heuristic_map(
     int* map,
     int collision_thresh,
@@ -82,11 +70,10 @@ std::map<std::pair<int, int>, double> heuristic_map(
     int* target_traj,
     int target_steps
 ) {
+    // if target is same as previous target, return cached map
     static std::map<std::pair<int, int>, double> cached_map;
     static int cached_targetX = -1;
-    static int cached_targetY = -1;
-    
-    // Only recalculate if target has moved significantly
+    static int cached_targetY = -1; 
     if (cached_targetX == targetX && cached_targetY == targetY) {
         return cached_map;
     }
@@ -105,22 +92,20 @@ std::map<std::pair<int, int>, double> heuristic_map(
     int validTargetY = targetY;
     bool foundValid = gridValid(targetX, targetY, x_size, y_size, map, collision_thresh);
     
+    // if target is invalid, find nearest valid target
     if (!foundValid) {
-        std::cout << "Target position invalid, searching for valid target..." << std::endl;
         for (int i = target_steps - 1; i >= 0; i--) {
             validTargetX = target_traj[i];
             validTargetY = target_traj[i + target_steps];
             if (gridValid(validTargetX, validTargetY, x_size, y_size, map, collision_thresh)) {
                 foundValid = true;
-                std::cout << "Found valid target at index " << i << ": (" 
-                         << validTargetX << "," << validTargetY << ")" << std::endl;
                 break;
             }
         }
         
+        // no valid target found
         if (!foundValid) {
-            std::cout << "Warning: No valid target found in trajectory" << std::endl;
-            // Return empty map if no valid target found
+            std::cout << "No valid target in trajectory" << std::endl;
             return distances;
         }
     }
@@ -152,9 +137,7 @@ std::map<std::pair<int, int>, double> heuristic_map(
 
             // checks if grid is valid and not visited
             if (gridValid(newx, newy, x_size, y_size, map, collision_thresh) && 
-                visited.count(neighbor) == 0) {
-                // std::cout << "Valid grid and not visited" << std::endl;
-                
+                visited.count(neighbor) == 0) {                
                 double newg = current_g + 1;
                 
                 // Only update distance if it's better than existing
@@ -173,8 +156,7 @@ std::map<std::pair<int, int>, double> heuristic_map(
 }
 
 
-// expand using heuristic map
-// if on robot trajectory, follow trajectory backwards
+// planner
 void planner(
     int* map,
     int collision_thresh,
@@ -197,8 +179,8 @@ void planner(
         if(map[i] < min_val) min_val = map[i];
         if(map[i] > max_val) max_val = map[i];
     }
-    // int adaptive_epsilon = (max_val - min_val) / 2; // worked for maps 1,2, 3,4, 5 (X)
-    int adaptive_epsilon = (max_val - min_val) / 1.2; 
+
+    int adaptive_epsilon = (max_val - min_val) / 1.2; // 2 doesn't work for map 5
     // worked for map 1, 2 (nop opt), 3 (not opt), 4 (not opt), 5, 6, 7 (might be tricky), 8, 9 (could account for the steps but this will take more time to implement), 10
     
     // weighted A*
@@ -220,8 +202,8 @@ void planner(
     visited_positions.insert({robotposeX, robotposeY});
     
     // if goal trajectory is reached and within 10 steps
-    if (robotposeX == goalposeX && robotposeY == goalposeY && (target_steps - curr_time) < 20) {
-        std::cout << "Goal trajectory reached, staying still" << std::endl;
+    if (robotposeX == goalposeX && robotposeY == goalposeY && (target_steps - curr_time) < 10) {
+        std::cout << "On goal trajectory, staying still" << std::endl;
         action_ptr[0] = robotposeX;
         action_ptr[1] = robotposeY;
         return;
@@ -230,7 +212,7 @@ void planner(
     // if on target trajectory (that is in the future), follow trajectory backwards
     for (int i = target_steps - 1; i > 0; i--) {
         // if on target trajectory and within 10 steps stay still
-        if (robotposeX == target_traj[i] && robotposeY == target_traj[i+target_steps] && 0 < (i - curr_time) &&(i - curr_time) < 20) {
+        if (robotposeX == target_traj[i] && robotposeY == target_traj[i+target_steps] && 0 < (i - curr_time) &&(i - curr_time) < 10) {
             std::cout << "On target trajectory, staying still" << std::endl;
             action_ptr[0] = robotposeX;
             action_ptr[1] = robotposeY;
@@ -238,7 +220,6 @@ void planner(
         } 
         else if (robotposeX == target_traj[i] && robotposeY == target_traj[i+target_steps] && (i > curr_time)) {
                 std::cout << "On target trajectory, following backwards" << std::endl;
-                std::cout << target_traj[i-1] << " " << target_traj[i+target_steps-1] << std::endl;
                 action_ptr[0] = target_traj[i - 1];
                 action_ptr[1] = target_traj[i + target_steps - 1];
                 return;
@@ -260,15 +241,17 @@ void planner(
         int newx = robotposeX + dX[dir];
         int newy = robotposeY + dY[dir];
         
-        // Double check validity before considering move
+        // if not a valid grid, continue
         if (!gridValid(newx, newy, x_size, y_size, map, collision_thresh)) {
             continue;
         }
         
+        // if visited, continue
         if (visited_positions.count({newx, newy}) > 0) {
             continue;
         }
         
+        // if not in heuristic map, continue
         auto it = h_map.find({newx, newy});
         if (it == h_map.end()) {
             continue;
@@ -287,12 +270,12 @@ void planner(
         }
     }
 
-    // Safety check before applying move
+    // valid move and valid grid - move to best next grid
     if (found_valid_move && gridValid(best_next.first, best_next.second, x_size, y_size, map, collision_thresh)) {
         action_ptr[0] = best_next.first;
         action_ptr[1] = best_next.second;
     } else {
-        // Stay in place if no valid move found
+        // no valid move found - stay still
         action_ptr[0] = robotposeX;
         action_ptr[1] = robotposeY;
     }
