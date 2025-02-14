@@ -213,7 +213,7 @@ void planner(
     }
 
     int adaptive_epsilon = (max_val - min_val) / 1.2; // 2 doesn't work for map 5
-    // 12, 11, 10, 6
+    // 1
     
     // weighted A*
     int epsilon = adaptive_epsilon; 
@@ -288,8 +288,8 @@ void planner(
         else if (robotposeX == target_traj[i] && robotposeY == target_traj[i+target_steps] && (i > curr_time)) {
             std::cout << "On target trajectory, following backwards" << std::endl;
             last_trajectory_index = i;  // Remember where we are in the trajectory
-            action_ptr[0] = target_traj[i-2];
-            action_ptr[1] = target_traj[i-2 + target_steps];
+            action_ptr[0] = target_traj[i-1];
+            action_ptr[1] = target_traj[i-1 + target_steps];
             return;
         }
     }
