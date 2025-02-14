@@ -240,21 +240,15 @@ void planner(
     int goalposeY = target_traj[2*(mode * (target_steps)-1)/4];
 
     // if distance between current and goal is greater than 
-    if (mode < 4) {
-        int steps_to_target = ((mode * (target_steps-1))/4 - curr_time);
-        double distance_to_target = euclidean_heuristic(robotposeX, robotposeY, goalposeX, goalposeY);
-        
-        if (distance_to_target > steps_to_target * 0.6) {  // 0.6 switching at map7:3, switch at map7:187
-        // maybe use only when trajectory is extremely long
-            mode = std::min(mode + 1, 4);  // Ensure we don't exceed mode 4
-            std::cout << "Moving to next target (mode " << mode << ")" << std::endl;
-            goalposeX = target_traj[(mode * (target_steps)-1)/4];
-            goalposeY = target_traj[2*(mode * (target_steps)-1)/4];
-            
-            // Clear visited positions when changing modes
-            static std::set<std::pair<int, int>> visited_positions;
-            visited_positions.clear();
-        }
+    int steps_to_target = ((mode * (target_steps-1))/4 - curr_time);
+    double distance_to_target = euclidean_heuristic(robotposeX, robotposeY, goalposeX, goalposeY);
+    
+    if (distance_to_target > steps_to_target * 0.6) {  // 0.6 switching at map7:3, switch at map7:187
+    // maybe use only when trajectory is extremely long
+        mode = std::min(mode + 1, 4);  // Ensure we don't exceed mode 4
+        std::cout << "Moving to next target (mode " << mode << ")" << std::endl;
+        goalposeX = target_traj[(mode * (target_steps)-1)/4];
+        goalposeY = target_traj[2*(mode * (target_steps)-1)/4];
     }
 
 
@@ -269,13 +263,16 @@ void planner(
         action_ptr[1] = robotposeY;
         return;
     }
-    
+
+ /* 
     // if on target trajectory (that is in the future), follow trajectory backwards
-    static int last_trajectory_index = target_steps - 1; 
+    // static int last_trajectory_index = target_steps - 1; 
+    int last_trajectory_index = target_steps - 1; 
+
     // Reset index for new map
-    if (curr_time == 0) {
-        last_trajectory_index = target_steps - 1;
-    }
+    // if (curr_time == 0) {
+    //     last_trajectory_index = target_steps - 1;
+    // }
     
     for (int i = last_trajectory_index; i > 0; i--) {
         // if on target trajectory and within 10 steps stay still
@@ -293,6 +290,7 @@ void planner(
             return;
         }
     }
+*/
 
     // Initialize backward A* heuristic map
     std::map<std::pair<int, int>, double> h_map = heuristic_map(map, collision_thresh, x_size, y_size, goalposeX, goalposeY, robotposeX, robotposeY, target_traj, target_steps);
