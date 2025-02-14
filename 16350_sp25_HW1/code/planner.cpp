@@ -11,6 +11,8 @@ g++ -std=c++17 runtest.cpp planner.cpp
 python visualize.py undergrad/map5.txt
 */
 
+// Works for maps: 1 ~ 12
+
 #include "planner.h"
 #include <math.h>
 #include <iostream>
@@ -197,23 +199,27 @@ void planner(
     int* action_ptr
 )
 {
-    // Calculate current target position based on mode
-    int goalposeX = target_traj[(mode * target_steps)/4]; 
-    int goalposeY = target_traj[2*target_steps - 1 - ((4-mode) * target_steps)/4];
+    // int num_modes = 2;
+    // // Calculate current target position based on mode
+    // int goalposeX = target_traj[(mode * target_steps)/num_modes]; 
+    // int goalposeY = target_traj[2*target_steps - 1 - ((num_modes-mode) * target_steps)/num_modes];
     
-    // Calculate Manhattan distance to current goal
-    int manhattan_dist = abs(robotposeX - goalposeX) + abs(robotposeY - goalposeY);
-    int steps_remaining = target_steps - curr_time;
+    // // Calculate Manhattan distance to current goal
+    // int manhattan_dist = abs(robotposeX - goalposeX) + abs(robotposeY - goalposeY);
+    // int steps_remaining = target_steps - curr_time;
     
-    // If distance to current goal is too high, move to next quarter
-    if (manhattan_dist > steps_remaining && mode < 4) {
-        mode++;
-        h_map_initialized = false;  // Reset to create new heuristic map
-        std::cout << "Moving to next target (mode " << mode << ")" << std::endl;
-        // Update goal for new mode
-        goalposeX = target_traj[(mode * target_steps)/4];
-        goalposeY = target_traj[2*target_steps - 1 - ((4-mode) * target_steps)/4];
-    }
+    // // If distance to current goal is too high, move to next quarter
+    // if (manhattan_dist > steps_remaining && mode < num_modes) {
+    //     mode++;
+    //     h_map_initialized = false;  // Reset to create new heuristic map
+    //     std::cout << "Moving to next target (mode " << mode << ")" << std::endl;
+    //     // Update goal for new mode
+    //     goalposeX = target_traj[(mode * target_steps)/num_modes];
+    //     goalposeY = target_traj[2*target_steps - 1 - ((num_modes-mode) * target_steps)/num_modes];
+    // }
+
+    int goalposeX = target_traj[target_steps - 1];
+    int goalposeY = target_traj[2*target_steps - 1];
     
     // Initialize heuristic map only once
     if (!h_map_initialized) {
