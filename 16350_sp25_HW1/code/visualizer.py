@@ -81,7 +81,7 @@ if __name__ == "__main__":
 
 
     ani = FuncAnimation(fig, update, frames=(len(robot_trajectory) - 1) // SPEEDUP, init_func=init, blit=False,
-                        interval=1)
+                        interval=1, repeat=False)
 
     plt.legend()
     plt.show()
