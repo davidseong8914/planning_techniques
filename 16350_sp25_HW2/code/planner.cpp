@@ -516,53 +516,141 @@ static void planner(
 		// initialize trees
 		nodes_init.push_back(q_init); // tree A
 		nodes_goal.push_back(q_goal); // tree B
-		bool tree_switch = true;
+		// bool tree_switch = true;
 
 		// keep track of trees A and B being connected
 		int init_idx = 0;
 		int goal_idx = 0;
 		bool connection = false;
+		bool swapped = false;
 
 		// random sampling (need to make it biased towards goal)
 		for (int k = 0; k < K && connection == false; k++) {
 			Node q_rand;
 			q_rand.joint_comb = new double [numofDOFs];
-			for (int i = 0; i < numofDOFs; i++) {
-				q_rand.joint_comb[i] = distribution(gen);
-			}
-
-			// nodes_init -> rand, nodes_goal -> connect
-			if (tree_switch == true && extend(nodes_init, q_rand, epsilon, numofDOFs, map, x_size, y_size) != TRAPPED){
-				while (connection == false || tree_switch == true) {
-					Node init_target = nodes_init[nearest_neighbor(nodes_init[nodes_init.size()-1], nodes_goal, numofDOFs)];
-					if (extend(nodes_goal, init_target, epsilon, numofDOFs, map, x_size, y_size) == REACHED) {
-						connection = true;
-					} else if (extend(nodes_goal, init_target, epsilon, numofDOFs, map, x_size, y_size) == TRAPPED) {
-						tree_switch = false;
-					}
-
-				}
-			}
-			// nodes_goal -> rand, nodes_init -> connect
-			if (tree_switch == false && extend(nodes_goal, q_rand, epsilon, numofDOFs, map, x_size, y_size) != TRAPPED) {
-				while (connection == false || tree_switch == false) {
-					Node goal_target = nodes_goal[nearest_neighbor(nodes_goal.back(), nodes_init, numofDOFs)];
-					if (extend(nodes_init, goal_target, epsilon, numofDOFs, map, x_size, y_size) == REACHED) {
-						connection = true;
-					} else if (extend(nodes_init, goal_target, epsilon, numofDOFs, map, x_size, y_size) == TRAPPED) {
-						tree_switch = true;
+			if (k % bias_check == 0) {
+				if (swapped == false) {
+				for (int i = 0; i < numofDOFs; i++) {
+					q_rand.joint_comb[i] = q_goal.joint_comb[i];
+				} }
+				else {
+					for (int i = 0; i < numofDOFs; i++) {
+						q_rand.joint_comb[i] = q_init.joint_comb[i];
 					}
 				}
+			} else {
+				for (int i = 0; i < numofDOFs; i++) {
+					q_rand.joint_comb[i] = distribution(gen);
+				}
 			}
-		} // generate samples until connection occurrs
 
-		if (!connection) {
-			std::cout << "Trees have not been connected or goal has not been reached \n";
-		} else {
-			std::vector<int> RRT_connect_path;
-			
+			if (extend(nodes_init, q_rand, epsilon, numofDOFs, map, x_size, y_size) != TRAPPED) {
+				// setting last ndoe in init tree as target for goal tree
+				Node connect_target;
+				connect_target.joint_comb = new double[numofDOFs];
+				for (int i=0; i<numofDOFs; i++) {
+					connect_target.joint_comb[i] = nodes_init.back().joint_comb[i];
+				}
+
+
+
+
+
+				ExtendStatus status = ADVANCED;
+				while (status == ADVANCED && !connection) {
+					status = extend(nodes_goal, connect_target, epsilon, numofDOFs, map, x_size, y_size);
+					if (status == REACHED) {
+						connection = true;
+						init_idx = nodes_init.size() - 1;
+						goal_idx = nodes_goal.size() - 1;
+						break;
+					}
+					// update target
+					for (int i = 0; i < numofDOFs; i++) {
+						connect_target.joint_comb[i] = nodes_goal.back().joint_comb[i];
+					}
+				}
+
+
+
+
+				delete[] connect_target.joint_comb;
+			}
+
+			// if not connected -> swap trees and repeat
+			if (connection == false) {
+				std::vector<Node> temp = nodes_init;
+				nodes_init = nodes_goal;
+				nodes_goal = temp;
+				swapped = !swapped;
+			}
+
+			delete[] q_rand.joint_comb;
 		}
 
+		// if connected
+		if (connection) {
+			std::cout << "Connected \n";
+			std::vector<int> init_path;
+			std::vector<int> goal_path;
+
+			// untangling swaps
+			if (swapped) {
+				std::swap(init_idx, goal_idx);
+				std::swap(nodes_init, nodes_goal);
+			}
+
+			// init path
+			int current = init_idx;
+			while (current != -1) {
+				init_path.push_back(current);
+				current = nodes_init[current].parent;
+			}
+			std::reverse(init_path.begin(), init_path.end());
+
+			// goal path
+			current = goal_idx;
+			while (current != -1) {
+				goal_path.push_back(current);
+				current = nodes_goal[current].parent;
+			}
+
+			// Calculate total path length
+			*planlength = init_path.size() + goal_path.size();
+			
+			// Allocate memory for the path
+			*plan = (double**) malloc((*planlength) * sizeof(double*));
+			
+			// Fill in path from start to connection point
+			for (int i = 0; i < init_path.size(); i++) {
+				(*plan)[i] = (double*) malloc(numofDOFs * sizeof(double));
+				for (int j = 0; j < numofDOFs; j++) {
+					(*plan)[i][j] = nodes_init[init_path[i]].joint_comb[j];
+				}
+			}
+        
+			// Fill in path from connection point to goal
+			for (int i = 0; i < goal_path.size(); i++) {
+				int plan_idx = init_path.size() + i;
+				(*plan)[plan_idx] = (double*) malloc(numofDOFs * sizeof(double));
+				for (int j = 0; j < numofDOFs; j++) {
+					(*plan)[plan_idx][j] = nodes_goal[goal_path[i]].joint_comb[j];
+				}
+			}
+		} else {
+			std::cout << "Trees have not been connected" << std::endl;
+			// Set empty plan
+			*plan = NULL;
+			*planlength = 0;
+		}
+		
+		// Cleanup
+		for (size_t i = 0; i < nodes_init.size(); i++) {
+			delete[] nodes_init[i].joint_comb;
+		}
+		for (size_t i = 0; i < nodes_goal.size(); i++) {
+			delete[] nodes_goal[i].joint_comb;
+		}
 	}
 
 
