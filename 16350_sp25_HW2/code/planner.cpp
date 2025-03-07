@@ -30,6 +30,7 @@ python visualize.py undergrad/map5.txt
 
 // ones I added
 #include <random>
+#include <set>
 
 /* Input Arguments */
 #define	MAP_IN      prhs[0]
@@ -309,36 +310,40 @@ double euclidean_distance (double* angles1, double* angles2, int numofDOFs) {
 	return sqrt(dist);
 }
 
-int nearest_neighbor(Node q_rand, std::vector<Node>& nodes, int numofDOFs) {
-	int near_ind = 0;
-	double min_dist = euclidean_distance(nodes[0].joint_comb, q_rand.joint_comb, numofDOFs);
+// extend status
+enum ExtendStatus {
+    TRAPPED = 0,
+    ADVANCED = 1,
+    REACHED = 2
+};
 
-	for (int i = 1; i < nodes.size(); i++) {
-		double dist = euclidean_distance(nodes[i].joint_comb, q_rand.joint_comb, numofDOFs);
-		if (dist < min_dist) {
-			min_dist = dist;
-			near_ind = i;
-		}
-	}
+int nearest_neighbor(Node q_target, const std::vector<Node>& nodes, int numofDOFs) {
+    int near_ind = 0;
+    double min_dist = euclidean_distance(nodes[0].joint_comb, q_target.joint_comb, numofDOFs);
 
-	return near_ind;
-}
-
-int near_ep(Node q_rand, std::vector<Node>& nodes, int numofDOFs, double epsilon) {
-    int best_node_idx = nearest_neighbor(q_rand, nodes, numofDOFs);
-    double min_dist = euclidean_distance(nodes[best_node_idx].joint_comb, q_rand.joint_comb, numofDOFs);
-    
-    // If already within epsilon, return this node
-    if (min_dist <= epsilon) {
-        return best_node_idx;
+    for (int i = 1; i < nodes.size(); i++) {
+        double dist = euclidean_distance(nodes[i].joint_comb, q_target.joint_comb, numofDOFs);
+        if (dist < min_dist) {
+            min_dist = dist;
+            near_ind = i;
+        }
     }
-    
-    // Otherwise return the original nearest neighbor
-    return best_node_idx;
+
+    return near_ind;
 }
 
-int extend(std::vector<Node>& nodes, Node q_rand, double stepsize, int numofDOFs, double* map, int x_size, int y_size) {
-	int neighbor_node_idx = near_ep(q_rand, nodes, numofDOFs, stepsize);
+// Connect function that keeps extending until it can't anymore
+ExtendStatus connect(std::vector<Node>& tree, Node q_target, double stepsize, int numofDOFs, double* map, int x_size, int y_size) {
+    ExtendStatus status;
+    do {
+        status = extend_connect(tree, q_target, stepsize, numofDOFs, map, x_size, y_size);
+    } while (status == ADVANCED);
+    
+    return status;
+}
+
+ExtendStatus extend(std::vector<Node>& nodes, Node q_rand, double stepsize, int numofDOFs, double* map, int x_size, int y_size) {
+	int neighbor_node_idx = nearest_neighbor(q_rand, nodes, numofDOFs);
 
 	// q_new : step size from q_near to q_rand
 	Node q_new;
@@ -349,7 +354,6 @@ int extend(std::vector<Node>& nodes, Node q_rand, double stepsize, int numofDOFs
 	double magnitude = 0;
 	std::vector<double> direction_vector(numofDOFs);
 
-
 	for (int i = 0; i < numofDOFs; i++) {
 		double diff = q_rand.joint_comb[i] - nodes[neighbor_node_idx].joint_comb[i];
 		magnitude += diff * diff;
@@ -358,29 +362,28 @@ int extend(std::vector<Node>& nodes, Node q_rand, double stepsize, int numofDOFs
 
 	magnitude = sqrt(magnitude);
 
-	if (magnitude <= stepsize) {
-		// if target q_rand is closer than stepsize
-		for (int i = 0; i <numofDOFs; i++) {
-			q_new.joint_comb[i] = q_rand.joint_comb[i];
-		}
-	} else {
-		for (int i = 0; i < numofDOFs; i++) {
-			q_new.joint_comb[i] = nodes[neighbor_node_idx].joint_comb[i] + (direction_vector[i] / magnitude) * stepsize;
+    if (magnitude <= stepsize) {
+        // if closer than stepsize, directly to target
+        for (int i = 0; i < numofDOFs; i++) {
+            q_new.joint_comb[i] = q_rand.joint_comb[i];
+        }
+    } else {
+        // stepsize towards target
+        for (int i = 0; i < numofDOFs; i++) {
+            q_new.joint_comb[i] = nodes[neighbor_node_idx].joint_comb[i] + (direction_vector[i] / magnitude) * stepsize;
+        }
+    }
 
-		}
-	}
-
-	// reached target
-	if (IsValidArmConfiguration(q_new.joint_comb, numofDOFs, map, x_size, y_size)) {
-		nodes.push_back(q_new);
-		return 1;
-	} // trapped
-	else {
-		return 0;
-	}
-
-
-
+    if (IsValidArmConfiguration(q_new.joint_comb, numofDOFs, map, x_size, y_size)) {
+        nodes.push_back(q_new);
+        if (magnitude <= stepsize) {
+            return REACHED;
+        }
+        return ADVANCED;
+    } else {
+        delete[] q_new.joint_comb;
+        return TRAPPED;
+    }
 }
 
 static void planner(
@@ -403,39 +406,40 @@ static void planner(
 	std::vector<Node> nodes_goal;
 
 	// number of samples
-	int K = 10000;
+	int K = 50000;
 	// how often to generate biased node
-	int bias_check = 30;
+	int bias_check = 10;
 	// angle step size
-	// double epsilon = 2.0; // kind of smoother
+	double epsilon = 0.5;
 	// double epsilon = PI/20;
-	double epsilon = 2.0;
 
 	// initial  node
-		Node q_init;
-		// memory for joint angles
-		q_init.joint_comb = new double[numofDOFs];
-		// set initial configuration
-		for (int i = 0; i < numofDOFs; i++) {
-			q_init.joint_comb[i] = armstart_anglesV_rad[i];
-		}
-		//set index
-		q_init.parent = -1;
-		nodes.push_back(q_init);
+	Node q_init;
+	// memory for joint angles
+	q_init.joint_comb = new double[numofDOFs];
+	// set initial configuration
+	for (int i = 0; i < numofDOFs; i++) {
+		q_init.joint_comb[i] = armstart_anglesV_rad[i];
+	}
+	//set index
+	q_init.parent = -1;
+
 	// final node
-		Node q_goal;
-		q_goal.joint_comb = new double[numofDOFs];
-		for (int i = 0; i < numofDOFs; i++) {
-			q_goal.joint_comb[i] = armgoal_anglesV_rad[i];
-		}
+	Node q_goal;
+	q_goal.joint_comb = new double[numofDOFs];
+	for (int i = 0; i < numofDOFs; i++) {
+		q_goal.joint_comb[i] = armgoal_anglesV_rad[i];
+	}
 
 	// generate random angle between 0 - 2pi
-		std::random_device rd;  // Used to obtain a seed for the random number engine
-		std::mt19937 gen(rd()); // Standard mersenne_twister_engine
-		std::uniform_real_distribution<double> distribution(0.0, 2.0 * PI);
+	std::random_device rd;  // Used to obtain a seed for the random number engine
+	std::mt19937 gen(rd()); // Standard mersenne_twister_engine
+	std::uniform_real_distribution<double> distribution(0.0, 2.0 * PI);
 
 	// RRT : planner id = 0
 	if (whichPlanner == 0) {
+		nodes.push_back(q_init);
+		bool goal_reached = false;
 
 		// random sampling (need to make it biased towards goal)
 		for (int k = 0; k < K; k++) {
@@ -456,45 +460,53 @@ static void planner(
 
 			// extend towards q_rand, returns true if can connect 
 			extend(nodes, q_rand, epsilon, numofDOFs, map, x_size, y_size);
+			delete[] q_rand.joint_comb;
 
 			// check if can connect to goal
 			if (k % (bias_check * 2) == 0) {
-				if (extend(nodes, q_goal, epsilon, numofDOFs, map, x_size, y_size)) {
+				if (extend(nodes, q_goal, epsilon, numofDOFs, map, x_size, y_size) == REACHED) {
 					// stops sampling if goal can be reached
+					goal_reached = true;
 					break;
 				}
 			}
 		}
 
 		// backtracking to find path
-			// find nearest node to goal (goal_m1)
-			int close_goal_idx = near_ep(q_goal, nodes, numofDOFs, epsilon);
-			Node goal_m1;
-			goal_m1.joint_comb = new double[numofDOFs]; // difference between vector<double> and new double?
-			goal_m1.parent = close_goal_idx;
-			for (int i = 0; i < numofDOFs; i++) {
-				goal_m1.joint_comb[i] = q_goal.joint_comb[i];
-			}
+		std::vector<int> RRT_path;
 
-			// connect goal_m1 - q_goal
-			bool m1_goal_connect = IsValidArmConfiguration(goal_m1.joint_comb, numofDOFs, map, x_size, y_size);
-			if (m1_goal_connect) {
-				nodes.push_back(goal_m1);
-				close_goal_idx = nodes.size() - 1;
-			}
-
-			std::vector<int> RRT_path;
-			int current = close_goal_idx;
-			while (current != -1) { // why index set to -1?
+		// goal reached
+		if (goal_reached) {
+			int goal_idx = nodes.size() - 1; 
+			int current = goal_idx;
+			while (current != -1) {
 				RRT_path.push_back(current);
 				current = nodes[current].parent;
 			}
+			std::cout << "Goal reached with planner 0: RRT " << std::endl;
+		} else {
+		// goal not reached -> go to nearest 
+			int nearest = nearest_neighbor(q_goal, nodes, numofDOFs);
 
-			// reverse path
+			q_goal.parent = nearest;
+
+			if (IsValidArmConfiguration(q_goal.joint_comb, numofDOFs, map, x_size, y_size)) {
+				nodes.push_back(q_goal);
+				nearest = nodes.size() - 1;
+			} 
+
+			int current = nearest;
+			while (current != -1) {
+				RRT_path.push_back(current);
+				current = nodes[current].parent;
+			}
+		}
+
 			std::reverse(RRT_path.begin(), RRT_path.end());
-
 			// formatting
 			*planlength = RRT_path.size();
+			std::cout << RRT_path.size();
+
 			*plan = (double**) malloc((*planlength) * sizeof(double*));
 			for (int i = 0; i < *planlength; i++) {
 				(*plan)[i] = (double*) malloc(numofDOFs * sizeof(double));
@@ -509,42 +521,23 @@ static void planner(
 			}
 	}
 	
-
-
 	// RRT-Connect : planner id = 1
 	else if (whichPlanner == 1) {
-		// initialize a, b 
+		// initialize trees
 		nodes_init.push_back(q_init); // tree A
 		nodes_goal.push_back(q_goal); // tree B
-		int tree_switch = 0; // nodes_init | tree A
+		bool tree_switch = false;
+
+		// keep track of trees A and B being connected
+		int init_connect = 0;
+		int goal_connect = 0;
+		bool connection = false;
 		
-		// random sampling (need to make it biased towards goal)
-		for (int k = 0; k < K; k++) {
-			Node q_rand;
-			q_rand.joint_comb = new double [numofDOFs];
-			for (int i = 0; i < numofDOFs; i++) {
-				q_rand.joint_comb[i] = distribution(gen);
-			}
-
-			if (tree_switch == 0) {
-				// extend towards q_rand, returns true if can connect
-				bool reached = true;
-				while (reached) {
-					reached = extend(nodes_init, q_rand, epsilon, numofDOFs, map, x_size, y_size);
-				}
-
-				bool connect = true;
-				while (connect) {
-					connect = extend(nodes_goal, nodes_init[-1], epsilon, numofDOFs, map, x_size, y_size);
-				}
-
-			} else { // tree_switch == 1 | tree B
-
-			}
-
-
-		}
+		
 	}
+
+
+
 
 	// RRT* : planner id = 2
 	else if (whichPlanner == 2) {
