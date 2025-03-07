@@ -376,6 +376,8 @@ ExtendStatus extend(std::vector<Node>& nodes, Node q_rand, double stepsize, int 
     }
 }
 
+
+
 static void planner(
 			double* map,
 			int x_size,
@@ -398,9 +400,9 @@ static void planner(
 	// number of samples
 	int K = 150000;
 	// how often to generate biased node
-	int bias_check = 20;
+	int bias_check = 10;
 	// angle step size
-	double epsilon = 0.3;
+	double epsilon = 0.2;
 	// double epsilon = PI/20;
 
 	// initial  node
@@ -565,6 +567,7 @@ static void planner(
 				
 				while (status == ADVANCED && !connection) {
 					status = extend(nodes_goal, connect_target, epsilon, numofDOFs, map, x_size, y_size);
+					std::cout << status << std::endl;
 					
 					if (status == REACHED) {
 						// Trees connected!
@@ -676,6 +679,9 @@ static void planner(
 			delete[] nodes_goal[i].joint_comb;
 		}
 	}
+
+
+
 
 
 
