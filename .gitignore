@@ -2,3 +2,7 @@
 16350_sp25_hw1/undergrad
 *.DS_Store
 *.vscode
+
+*.gif
+*.txt
+*.out
