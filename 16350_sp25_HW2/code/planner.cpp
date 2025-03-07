@@ -396,11 +396,11 @@ static void planner(
 	std::vector<Node> nodes_goal;
 
 	// number of samples
-	int K = 50000;
+	int K = 150000;
 	// how often to generate biased node
-	int bias_check = 10;
+	int bias_check = 20;
 	// angle step size
-	double epsilon = 0.5;
+	double epsilon = 0.3;
 	// double epsilon = PI/20;
 
 	// initial  node
@@ -513,27 +513,33 @@ static void planner(
 	
 	// RRT-Connect : planner id = 1
 	else if (whichPlanner == 1) {
+		// Set parent for initial nodes
+		q_init.parent = -1;
+		q_goal.parent = -1;
+		
 		// initialize trees
-		nodes_init.push_back(q_init); // tree A
-		nodes_goal.push_back(q_goal); // tree B
-		// bool tree_switch = true;
-
+		nodes_init.push_back(q_init); // tree A (start)
+		nodes_goal.push_back(q_goal); // tree B (goal)
+		
 		// keep track of trees A and B being connected
 		int init_idx = 0;
 		int goal_idx = 0;
 		bool connection = false;
 		bool swapped = false;
 
-		// random sampling (need to make it biased towards goal)
-		for (int k = 0; k < K && connection == false; k++) {
+		// random sampling
+		for (int k = 0; k < K && !connection; k++) {
+			// Generate random configuration
 			Node q_rand;
-			q_rand.joint_comb = new double [numofDOFs];
+			q_rand.joint_comb = new double[numofDOFs];
+			
+			// Occasionally bias towards goal/start
 			if (k % bias_check == 0) {
-				if (swapped == false) {
-				for (int i = 0; i < numofDOFs; i++) {
-					q_rand.joint_comb[i] = q_goal.joint_comb[i];
-				} }
-				else {
+				if (!swapped) {
+					for (int i = 0; i < numofDOFs; i++) {
+						q_rand.joint_comb[i] = q_goal.joint_comb[i];
+					}
+				} else {
 					for (int i = 0; i < numofDOFs; i++) {
 						q_rand.joint_comb[i] = q_init.joint_comb[i];
 					}
@@ -544,102 +550,120 @@ static void planner(
 				}
 			}
 
+			// Extend tree A toward random sample
 			if (extend(nodes_init, q_rand, epsilon, numofDOFs, map, x_size, y_size) != TRAPPED) {
-				// setting last ndoe in init tree as target for goal tree
+				// Try to connect tree B to the new node in tree A
 				Node connect_target;
 				connect_target.joint_comb = new double[numofDOFs];
-				for (int i=0; i<numofDOFs; i++) {
+				for (int i = 0; i < numofDOFs; i++) {
 					connect_target.joint_comb[i] = nodes_init.back().joint_comb[i];
 				}
-
-
-
-
-
+				
+				// Try to extend tree B toward the latest node in tree A
 				ExtendStatus status = ADVANCED;
+
+				
 				while (status == ADVANCED && !connection) {
 					status = extend(nodes_goal, connect_target, epsilon, numofDOFs, map, x_size, y_size);
+					
 					if (status == REACHED) {
+						// Trees connected!
 						connection = true;
 						init_idx = nodes_init.size() - 1;
 						goal_idx = nodes_goal.size() - 1;
 						break;
 					}
-					// update target
+					
+					// Update target to latest node in tree B
 					for (int i = 0; i < numofDOFs; i++) {
 						connect_target.joint_comb[i] = nodes_goal.back().joint_comb[i];
 					}
 				}
-
-
-
-
+				
 				delete[] connect_target.joint_comb;
 			}
-
-			// if not connected -> swap trees and repeat
-			if (connection == false) {
+			
+			// Only swap trees if no connection was found
+			if (!connection) {
 				std::vector<Node> temp = nodes_init;
 				nodes_init = nodes_goal;
 				nodes_goal = temp;
 				swapped = !swapped;
 			}
-
+			
 			delete[] q_rand.joint_comb;
 		}
 
-		// if connected
 		if (connection) {
-			std::cout << "Connected \n";
-			std::vector<int> init_path;
-			std::vector<int> goal_path;
-
-			// untangling swaps
+			std::cout << "Connected!" << std::endl;
+			std::cout << "init_idx: " << init_idx << ", goal_idx: " << goal_idx << std::endl;
+			std::cout << "nodes_init size: " << nodes_init.size() << ", nodes_goal size: " << nodes_goal.size() << std::endl;
+			
+			// unswapping
 			if (swapped) {
 				std::swap(init_idx, goal_idx);
 				std::swap(nodes_init, nodes_goal);
 			}
-
-			// init path
-			int current = init_idx;
-			while (current != -1) {
-				init_path.push_back(current);
-				current = nodes_init[current].parent;
+			
+			std::vector<int> init_path;
+			std::vector<int> goal_path;
+			
+			// Trace path from start to connection point
+			std::cout << "Building init path..." << std::endl;
+			if (init_idx >= 0 && init_idx < nodes_init.size()) {
+				int current = init_idx;
+				while (current != -1) {
+					init_path.push_back(current);
+					current = nodes_init[current].parent;
+				}
+				std::reverse(init_path.begin(), init_path.end());
+			} else {
+				std::cout << "Invalid init_idx: " << init_idx << std::endl;
 			}
-			std::reverse(init_path.begin(), init_path.end());
-
-			// goal path
-			current = goal_idx;
-			while (current != -1) {
-				goal_path.push_back(current);
-				current = nodes_goal[current].parent;
+			
+			// Trace path from connection point to goal
+			std::cout << "Building goal path..." << std::endl;
+			if (goal_idx >= 0 && goal_idx < nodes_goal.size()) {
+				int current = goal_idx;
+				while (current != -1) {
+					goal_path.push_back(current);
+					current = nodes_goal[current].parent;
+				}
+			} else {
+				std::cout << "Invalid goal_idx: " << goal_idx << std::endl;
 			}
-
+			
 			// Calculate total path length
 			*planlength = init_path.size() + goal_path.size();
+			std::cout << "Path length: " << *planlength << std::endl;
 			
-			// Allocate memory for the path
-			*plan = (double**) malloc((*planlength) * sizeof(double*));
-			
-			// Fill in path from start to connection point
-			for (int i = 0; i < init_path.size(); i++) {
-				(*plan)[i] = (double*) malloc(numofDOFs * sizeof(double));
-				for (int j = 0; j < numofDOFs; j++) {
-					(*plan)[i][j] = nodes_init[init_path[i]].joint_comb[j];
+			if (*planlength > 0) {
+				// Allocate memory for the path
+				*plan = (double**) malloc((*planlength) * sizeof(double*));
+				
+				// Fill in path from start to connection point
+				for (int i = 0; i < init_path.size(); i++) {
+					(*plan)[i] = (double*) malloc(numofDOFs * sizeof(double));
+					for (int j = 0; j < numofDOFs; j++) {
+						(*plan)[i][j] = nodes_init[init_path[i]].joint_comb[j];
+					}
 				}
-			}
-        
-			// Fill in path from connection point to goal
-			for (int i = 0; i < goal_path.size(); i++) {
-				int plan_idx = init_path.size() + i;
-				(*plan)[plan_idx] = (double*) malloc(numofDOFs * sizeof(double));
-				for (int j = 0; j < numofDOFs; j++) {
-					(*plan)[plan_idx][j] = nodes_goal[goal_path[i]].joint_comb[j];
+				
+				// Fill in path from connection point to goal
+				for (int i = 0; i < goal_path.size(); i++) {
+					int plan_idx = init_path.size() + i;
+					(*plan)[plan_idx] = (double*) malloc(numofDOFs * sizeof(double));
+					for (int j = 0; j < numofDOFs; j++) {
+						(*plan)[plan_idx][j] = nodes_goal[goal_path[i]].joint_comb[j];
+					}
 				}
+			} else {
+				std::cout << "Error: Empty path constructed" << std::endl;
+				*plan = NULL;
+				*planlength = 0;
 			}
 		} else {
 			std::cout << "Trees have not been connected" << std::endl;
-			// Set empty plan
 			*plan = NULL;
 			*planlength = 0;
 		}
@@ -652,7 +676,6 @@ static void planner(
 			delete[] nodes_goal[i].joint_comb;
 		}
 	}
-
 
 
 
