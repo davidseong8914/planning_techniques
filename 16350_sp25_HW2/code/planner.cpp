@@ -332,16 +332,6 @@ int nearest_neighbor(Node q_target, const std::vector<Node>& nodes, int numofDOF
     return near_ind;
 }
 
-// Connect function that keeps extending until it can't anymore
-ExtendStatus connect(std::vector<Node>& tree, Node q_target, double stepsize, int numofDOFs, double* map, int x_size, int y_size) {
-    ExtendStatus status;
-    do {
-        status = extend_connect(tree, q_target, stepsize, numofDOFs, map, x_size, y_size);
-    } while (status == ADVANCED);
-    
-    return status;
-}
-
 ExtendStatus extend(std::vector<Node>& nodes, Node q_rand, double stepsize, int numofDOFs, double* map, int x_size, int y_size) {
 	int neighbor_node_idx = nearest_neighbor(q_rand, nodes, numofDOFs);
 
@@ -526,14 +516,53 @@ static void planner(
 		// initialize trees
 		nodes_init.push_back(q_init); // tree A
 		nodes_goal.push_back(q_goal); // tree B
-		bool tree_switch = false;
+		bool tree_switch = true;
 
 		// keep track of trees A and B being connected
-		int init_connect = 0;
-		int goal_connect = 0;
+		int init_idx = 0;
+		int goal_idx = 0;
 		bool connection = false;
-		
-		
+
+		// random sampling (need to make it biased towards goal)
+		for (int k = 0; k < K && connection == false; k++) {
+			Node q_rand;
+			q_rand.joint_comb = new double [numofDOFs];
+			for (int i = 0; i < numofDOFs; i++) {
+				q_rand.joint_comb[i] = distribution(gen);
+			}
+
+			// nodes_init -> rand, nodes_goal -> connect
+			if (tree_switch == true && extend(nodes_init, q_rand, epsilon, numofDOFs, map, x_size, y_size) != TRAPPED){
+				while (connection == false || tree_switch == true) {
+					Node init_target = nodes_init[nearest_neighbor(nodes_init[nodes_init.size()-1], nodes_goal, numofDOFs)];
+					if (extend(nodes_goal, init_target, epsilon, numofDOFs, map, x_size, y_size) == REACHED) {
+						connection = true;
+					} else if (extend(nodes_goal, init_target, epsilon, numofDOFs, map, x_size, y_size) == TRAPPED) {
+						tree_switch = false;
+					}
+
+				}
+			}
+			// nodes_goal -> rand, nodes_init -> connect
+			if (tree_switch == false && extend(nodes_goal, q_rand, epsilon, numofDOFs, map, x_size, y_size) != TRAPPED) {
+				while (connection == false || tree_switch == false) {
+					Node goal_target = nodes_goal[nearest_neighbor(nodes_goal.back(), nodes_init, numofDOFs)];
+					if (extend(nodes_init, goal_target, epsilon, numofDOFs, map, x_size, y_size) == REACHED) {
+						connection = true;
+					} else if (extend(nodes_init, goal_target, epsilon, numofDOFs, map, x_size, y_size) == TRAPPED) {
+						tree_switch = true;
+					}
+				}
+			}
+		} // generate samples until connection occurrs
+
+		if (!connection) {
+			std::cout << "Trees have not been connected or goal has not been reached \n";
+		} else {
+			std::vector<int> RRT_connect_path;
+			
+		}
+
 	}
 
 
