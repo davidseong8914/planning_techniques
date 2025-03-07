@@ -297,6 +297,7 @@ int IsValidArmConfiguration(double* angles, int numofDOFs, double*	map,
 struct Node {
 	double* joint_comb;
 	int parent;
+	double cost;
 };
 
 double euclidean_distance (double* angles1, double* angles2, int numofDOFs) {
@@ -355,11 +356,15 @@ ExtendStatus extend(std::vector<Node>& nodes, Node q_rand, double stepsize, int 
         for (int i = 0; i < numofDOFs; i++) {
             q_new.joint_comb[i] = q_rand.joint_comb[i];
         }
+		q_new.cost = nodes[neighbor_node_idx].cost + (magnitude <= stepsize ? magnitude : stepsize);
+
     } else {
         // stepsize towards target
         for (int i = 0; i < numofDOFs; i++) {
             q_new.joint_comb[i] = nodes[neighbor_node_idx].joint_comb[i] + (direction_vector[i] / magnitude) * stepsize;
         }
+		q_new.cost = nodes[neighbor_node_idx].cost + (magnitude <= stepsize ? magnitude : stepsize);
+
     }
 
     if (IsValidArmConfiguration(q_new.joint_comb, numofDOFs, map, x_size, y_size)) {
@@ -492,6 +497,59 @@ void shortcutPath(std::vector<std::vector<double>>& path, int numofDOFs, double*
     path = smoothedPath;
 }
 
+
+// for RRT*
+std::vector<int> near_neighbors(const std::vector<Node>& nodes, int node_idx, double radius, int numofDOFs) {
+    std::vector<int> neighbors;
+    for (int i = 0; i < nodes.size(); i++) {
+        if (euclidean_distance(nodes[i].joint_comb, nodes[node_idx].joint_comb, numofDOFs) <= radius) {
+            neighbors.push_back(i);
+        }
+    }
+    return neighbors;
+}
+
+int choose_parent(std::vector<Node>& nodes, int new_node_idx, const std::vector<int>& near_indices, 
+                 double* map, int x_size, int y_size, int numofDOFs) {
+    int min_cost_idx = nodes[new_node_idx].parent;
+    double min_cost = nodes[new_node_idx].cost;
+    
+    for (int near_idx : near_indices) {
+        double edge_cost = euclidean_distance(nodes[near_idx].joint_comb, nodes[new_node_idx].joint_comb, numofDOFs);
+        double potential_cost = nodes[near_idx].cost + edge_cost;
+        
+        if (potential_cost < min_cost && 
+            isValidStraightLinePath(nodes[near_idx].joint_comb, nodes[new_node_idx].joint_comb, numofDOFs, map, x_size, y_size)) {
+            min_cost = potential_cost;
+            min_cost_idx = near_idx;
+        }
+    }
+    
+    // Update parent and cost
+    nodes[new_node_idx].parent = min_cost_idx;
+    nodes[new_node_idx].cost = min_cost;
+    
+    return min_cost_idx;
+}
+
+void rewire(std::vector<Node>& nodes, int new_node_idx, const std::vector<int>& near_indices, 
+           double* map, int x_size, int y_size, int numofDOFs) {
+    for (int near_idx : near_indices) {
+        // Skip parent
+        if (near_idx == nodes[new_node_idx].parent) continue;
+        
+        double edge_cost = euclidean_distance(nodes[new_node_idx].joint_comb, nodes[near_idx].joint_comb, numofDOFs);
+        double potential_cost = nodes[new_node_idx].cost + edge_cost;
+        
+        if (potential_cost < nodes[near_idx].cost && 
+            isValidStraightLinePath(nodes[new_node_idx].joint_comb, nodes[near_idx].joint_comb, numofDOFs, map, x_size, y_size)) {
+            // Rewire: change parent and update cost
+            nodes[near_idx].parent = new_node_idx;
+            nodes[near_idx].cost = potential_cost;
+        }
+    }
+}
+
 static void planner(
 			double* map,
 			int x_size,
@@ -512,9 +570,9 @@ static void planner(
 	std::vector<Node> nodes_goal;
 
 	// number of samples
-	int K = 150000;
+	int K = 100000;
 	// how often to generate biased node
-	int bias_check = 15;
+	int bias_check = 30;
 	// angle step size
 	double epsilon = 0.2; // epsilisimo
 	// double epsilon = PI/20;
@@ -648,164 +706,283 @@ static void planner(
 	}
 	
 	// RRT-Connect : planner id = 1
-else if (whichPlanner == 1) {
-    // Set parent for initial nodes
-    q_init.parent = -1;
-    q_goal.parent = -1;
-    
-    // initialize trees
-    nodes_init.push_back(q_init); // tree A (start)
-    nodes_goal.push_back(q_goal); // tree B (goal)
-    
-    // track connection points
-    int connect_init_idx = -1;
-    int connect_goal_idx = -1;
-    bool connection = false;
-    
-    // random sampling
-    for (int k = 0; k < K && !connection; k++) {
-        // Generate random configuration
-        Node q_rand;
-        q_rand.joint_comb = new double[numofDOFs];
-        
-        // Occasionally bias towards goal
-        if (k % bias_check == 0) {
-            for (int i = 0; i < numofDOFs; i++) {
-                q_rand.joint_comb[i] = q_goal.joint_comb[i];
-            }
-        } else {
-            for (int i = 0; i < numofDOFs; i++) {
-                q_rand.joint_comb[i] = distribution(gen);
-            }
-        }
-        
-        // Extend tree A toward random sample
-        ExtendStatus status_init = extend(nodes_init, q_rand, epsilon, numofDOFs, map, x_size, y_size);
-        
-        if (status_init != TRAPPED) {
-            // Create node for latest addition to tree A
-            Node q_new;
-            q_new.joint_comb = new double[numofDOFs];
-            for (int i = 0; i < numofDOFs; i++) {
-                q_new.joint_comb[i] = nodes_init.back().joint_comb[i];
-            }
-            
-            // Try to connect tree B to this new node
-            ExtendStatus status_goal = connect(nodes_goal, q_new, epsilon, numofDOFs, map, x_size, y_size);
-            
-            if (status_goal == REACHED) {
-                // Trees connected!
-                connection = true;
-                connect_init_idx = nodes_init.size() - 1;
-                connect_goal_idx = nodes_goal.size() - 1;
-            }
-            
-            delete[] q_new.joint_comb;
-        }
-        
-        // If no connection, swap trees for next iteration
-        if (!connection) {
-            std::swap(nodes_init, nodes_goal);
-        }
-        
-        delete[] q_rand.joint_comb;
-    }
-    
-    if (connection) {
-        std::cout << "Goal reached with planner 1: RRT-Connect" << std::endl;
-        
-        // Build path from both trees
-        std::vector<std::vector<double>> path;
-        
-        // Save exact start and goal configurations
-        std::vector<double> exact_start(numofDOFs);
-        std::vector<double> exact_goal(numofDOFs);
-        
-        for (int i = 0; i < numofDOFs; i++) {
-            exact_start[i] = armstart_anglesV_rad[i];
-            exact_goal[i] = armgoal_anglesV_rad[i];
-        }
-        
-        // Always start with the exact start configuration
-        path.push_back(exact_start);
-        
-        // Trace path from start to connection point
-        if (connect_init_idx >= 0) {
-            std::vector<int> init_path;
-            int current = connect_init_idx;
-            
-            while (current != -1 && current != 0) { // Skip the start node since we added exact_start
-                init_path.push_back(current);
-                current = nodes_init[current].parent;
-            }
-            
-            // Add init path in reverse order (near start to connection)
-            for (int i = init_path.size() - 1; i >= 0; i--) {
-                std::vector<double> config(numofDOFs);
-                for (int j = 0; j < numofDOFs; j++) {
-                    config[j] = nodes_init[init_path[i]].joint_comb[j];
-                }
-                path.push_back(config);
-            }
-        }
-        
-        // Trace path from connection point to goal
-        if (connect_goal_idx >= 0) {
-            std::vector<int> goal_path;
-            int current = connect_goal_idx;
-            
-            while (current != -1 && current != 0) { // Skip the goal node since we'll add exact_goal
-                goal_path.push_back(current);
-                current = nodes_goal[current].parent;
-            }
-            
-            // Add goal path in forward order (connection to near goal)
-            for (int i = 1; i < goal_path.size(); i++) {
-                std::vector<double> config(numofDOFs);
-                for (int j = 0; j < numofDOFs; j++) {
-                    config[j] = nodes_goal[goal_path[i]].joint_comb[j];
-                }
-                path.push_back(config);
-            }
-        }
-        
-        // Always end with the exact goal configuration
-        path.push_back(exact_goal);
+	else if (whichPlanner == 1) {
+		// Set parent for initial nodes
+		q_init.parent = -1;
+		q_goal.parent = -1;
+		
+		// initialize trees
+		nodes_init.push_back(q_init); // tree A (start)
+		nodes_goal.push_back(q_goal); // tree B (goal)
+		
+		// track connection points
+		int connect_init_idx = -1;
+		int connect_goal_idx = -1;
+		bool connection = false;
+		
+		// random sampling
+		for (int k = 0; k < K && !connection; k++) {
+			// Generate random configuration
+			Node q_rand;
+			q_rand.joint_comb = new double[numofDOFs];
+			
+			// Occasionally bias towards goal
+			if (k % bias_check == 0) {
+				for (int i = 0; i < numofDOFs; i++) {
+					q_rand.joint_comb[i] = q_goal.joint_comb[i];
+				}
+			} else {
+				for (int i = 0; i < numofDOFs; i++) {
+					q_rand.joint_comb[i] = distribution(gen);
+				}
+			}
+			
+			// Extend tree A toward random sample
+			ExtendStatus status_init = extend(nodes_init, q_rand, epsilon, numofDOFs, map, x_size, y_size);
+			
+			if (status_init != TRAPPED) {
+				// Create node for latest addition to tree A
+				Node q_new;
+				q_new.joint_comb = new double[numofDOFs];
+				for (int i = 0; i < numofDOFs; i++) {
+					q_new.joint_comb[i] = nodes_init.back().joint_comb[i];
+				}
+				
+				// Try to connect tree B to this new node
+				ExtendStatus status_goal = connect(nodes_goal, q_new, epsilon, numofDOFs, map, x_size, y_size);
+				
+				if (status_goal == REACHED) {
+					// Trees connected!
+					connection = true;
+					connect_init_idx = nodes_init.size() - 1;
+					connect_goal_idx = nodes_goal.size() - 1;
+				}
+				
+				delete[] q_new.joint_comb;
+			}
+			
+			// If no connection, swap trees for next iteration
+			if (!connection) {
+				std::swap(nodes_init, nodes_goal);
+			}
+			
+			delete[] q_rand.joint_comb;
+		}
+		
+		if (connection) {
+			std::cout << "Goal reached with planner 1: RRT-Connect" << std::endl;
+			
+			// Build path from both trees
+			std::vector<std::vector<double>> path;
+			
+			// Save exact start and goal configurations
+			std::vector<double> exact_start(numofDOFs);
+			std::vector<double> exact_goal(numofDOFs);
+			
+			for (int i = 0; i < numofDOFs; i++) {
+				exact_start[i] = armstart_anglesV_rad[i];
+				exact_goal[i] = armgoal_anglesV_rad[i];
+			}
+			
+			// Always start with the exact start configuration
+			path.push_back(exact_start);
+			
+			// Trace path from start to connection point
+			if (connect_init_idx >= 0) {
+				std::vector<int> init_path;
+				int current = connect_init_idx;
+				
+				while (current != -1 && current != 0) { // Skip the start node since we added exact_start
+					init_path.push_back(current);
+					current = nodes_init[current].parent;
+				}
+				
+				// Add init path in reverse order (near start to connection)
+				for (int i = init_path.size() - 1; i >= 0; i--) {
+					std::vector<double> config(numofDOFs);
+					for (int j = 0; j < numofDOFs; j++) {
+						config[j] = nodes_init[init_path[i]].joint_comb[j];
+					}
+					path.push_back(config);
+				}
+			}
+			
+			// Trace path from connection point to goal
+			if (connect_goal_idx >= 0) {
+				std::vector<int> goal_path;
+				int current = connect_goal_idx;
+				
+				while (current != -1 && current != 0) { // Skip the goal node since we'll add exact_goal
+					goal_path.push_back(current);
+					current = nodes_goal[current].parent;
+				}
+				
+				// Add goal path in forward order (connection to near goal)
+				for (int i = 1; i < goal_path.size(); i++) {
+					std::vector<double> config(numofDOFs);
+					for (int j = 0; j < numofDOFs; j++) {
+						config[j] = nodes_goal[goal_path[i]].joint_comb[j];
+					}
+					path.push_back(config);
+				}
+			}
+			
+			// Always end with the exact goal configuration
+			path.push_back(exact_goal);
 
-		shortcutPath(path, numofDOFs, map, x_size, y_size);
-        
-        // Set plan length and allocate memory
-        *planlength = path.size();
-        *plan = (double**) malloc((*planlength) * sizeof(double*));
-        
-        // Fill the plan with the path
-        for (int i = 0; i < *planlength; i++) {
-            (*plan)[i] = (double*) malloc(numofDOFs * sizeof(double));
-            for (int j = 0; j < numofDOFs; j++) {
-                (*plan)[i][j] = path[i][j];
-            }
-        }
+			shortcutPath(path, numofDOFs, map, x_size, y_size);
+			
+			// Set plan length and allocate memory
+			*planlength = path.size();
+			*plan = (double**) malloc((*planlength) * sizeof(double*));
+			
+			// Fill the plan with the path
+			for (int i = 0; i < *planlength; i++) {
+				(*plan)[i] = (double*) malloc(numofDOFs * sizeof(double));
+				for (int j = 0; j < numofDOFs; j++) {
+					(*plan)[i][j] = path[i][j];
+				}
+			}
 
-        std::cout << "Path length: " << path.size() << std::endl;
+			std::cout << "Path length: " << path.size() << std::endl;
 
-    } else {
-        std::cout << "Failed to connect trees" << std::endl;
-        *plan = NULL;
-        *planlength = 0;
-    }
-    
-    // Cleanup
-    for (size_t i = 0; i < nodes_init.size(); i++) {
-        delete[] nodes_init[i].joint_comb;
-    }
-    for (size_t i = 0; i < nodes_goal.size(); i++) {
-        delete[] nodes_goal[i].joint_comb;
-    }
-}
+		} else {
+			std::cout << "Failed to connect trees" << std::endl;
+			*plan = NULL;
+			*planlength = 0;
+		}
+		
+		// Cleanup
+		for (size_t i = 0; i < nodes_init.size(); i++) {
+			delete[] nodes_init[i].joint_comb;
+		}
+		for (size_t i = 0; i < nodes_goal.size(); i++) {
+			delete[] nodes_goal[i].joint_comb;
+		}
+	}
 
 	// RRT* : planner id = 2
 	else if (whichPlanner == 2) {
+		q_init.cost = 0.0;
+		nodes.push_back(q_init);
+		bool goal_reached = false;
 
+		// radius for nearest neighbor = epsilon ? gamma
+		double gamma = 1.0;
+
+		for (int k = 0; k < K && !goal_reached; k++) {
+			Node q_rand;
+			q_rand.joint_comb = new double[numofDOFs];
+
+			if (k % bias_check == 0) {
+				for (int i = 0; i < numofDOFs; i++) {
+					q_rand.joint_comb[i] = q_goal.joint_comb[i];
+				}
+			} else {
+				for (int i = 0; i < numofDOFs; i++) {
+					q_rand.joint_comb[i] = distribution(gen);
+				}
+			}
+
+			// Extend tree toward random configuration
+			int old_size = nodes.size();
+			ExtendStatus status = extend(nodes, q_rand, epsilon, numofDOFs, map, x_size, y_size);
+			delete[] q_rand.joint_comb;
+			
+			if (status != TRAPPED) {
+				// Calculate radius based on number of nodes
+				double radius = std::min(gamma * std::pow(std::log(nodes.size()) / nodes.size(), 1.0/numofDOFs), epsilon * 3.0);
+				
+				// Find neighbors within radius
+				std::vector<int> near_indices = near_neighbors(nodes, nodes.size()-1, radius, numofDOFs);
+				
+				// Choose best parent
+				choose_parent(nodes, nodes.size()-1, near_indices, map, x_size, y_size, numofDOFs);
+				
+				// Rewire the tree
+				rewire(nodes, nodes.size()-1, near_indices, map, x_size, y_size, numofDOFs);
+			}
+			
+			// Check for goal
+			if (k % bias_check == 0) {
+				double dist_to_goal = euclidean_distance(nodes.back().joint_comb, q_goal.joint_comb, numofDOFs);
+				if (dist_to_goal < epsilon && isValidStraightLinePath(nodes.back().joint_comb, q_goal.joint_comb, numofDOFs, map, x_size, y_size)) {
+					q_goal.parent = nodes.size() - 1;
+					q_goal.cost = nodes.back().cost + dist_to_goal;
+					nodes.push_back(q_goal);
+					goal_reached = true;
+					break;
+				}
+			}
+    	}
+
+		// backtracking to find path
+		std::vector<int> RRT_path;
+
+		// goal reached
+		if (goal_reached) {
+			int goal_idx = nodes.size() - 1; 
+			int current = goal_idx;
+			while (current != -1) {
+				RRT_path.push_back(current);
+				current = nodes[current].parent;
+			}
+			std::cout << "Goal reached with planner 2: RRT* " << std::endl;
+		} else {
+		// goal not reached -> go to nearest 
+			int nearest = nearest_neighbor(q_goal, nodes, numofDOFs);
+
+			q_goal.parent = nearest;
+
+			if (IsValidArmConfiguration(q_goal.joint_comb, numofDOFs, map, x_size, y_size)) {
+				nodes.push_back(q_goal);
+				nearest = nodes.size() - 1;
+			} 
+
+			int current = nearest;
+			while (current != -1) {
+				RRT_path.push_back(current);
+				current = nodes[current].parent;
+			}
+		}
+
+		std::reverse(RRT_path.begin(), RRT_path.end());
+		
+		// Convert path indices to configuration vectors for smoothing
+		std::vector<std::vector<double>> path;
+		for (int idx : RRT_path) {
+			std::vector<double> config(numofDOFs);
+			for (int j = 0; j < numofDOFs; j++) {
+				config[j] = nodes[idx].joint_comb[j];
+			}
+			path.push_back(config);
+		}
+		
+		// Make sure start and end points are exact
+		path[0] = std::vector<double>(armstart_anglesV_rad, armstart_anglesV_rad + numofDOFs);
+		path[path.size()-1] = std::vector<double>(armgoal_anglesV_rad, armgoal_anglesV_rad + numofDOFs);
+		
+		// Apply shortcutting and smoothing
+		shortcutPath(path, numofDOFs, map, x_size, y_size);
+		
+		// Set plan length and allocate memory
+		*planlength = path.size();
+		*plan = (double**) malloc((*planlength) * sizeof(double*));
+		
+		// Fill the plan with the path
+		for (int i = 0; i < *planlength; i++) {
+			(*plan)[i] = (double*) malloc(numofDOFs * sizeof(double));
+			for (int j = 0; j < numofDOFs; j++) {
+				(*plan)[i][j] = path[i][j];
+			}
+		}
+		
+		std::cout << "Path length: " << path.size() << std::endl;
+		
+		// cleanup
+		for (size_t i = 0; i < nodes.size(); i++) {
+			delete[] nodes[i].joint_comb;
+		}
 	}
 
 	//PRM : planner id = 3
