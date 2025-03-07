@@ -9,7 +9,11 @@ Run command:
 g++ -std=c++17 runtest.cpp planner.cpp
 ./a.out undergrad/map5.txt
 python visualize.py undergrad/map5.txt
+
+right now catches but doesn't move backwards in trajectory
 */
+
+// Works for maps: 1 ~ 12
 
 #include "planner.h"
 #include <math.h>
@@ -70,14 +74,6 @@ std::map<std::pair<int, int>, double> heuristic_map(
     int* target_traj,
     int target_steps
 ) {
-    // if target is same as previous target, return cached map
-    static std::map<std::pair<int, int>, double> cached_map;
-    static int cached_targetX = -1;
-    static int cached_targetY = -1; 
-    if (cached_targetX == targetX && cached_targetY == targetY) {
-        return cached_map;
-    }
-    
     std::map<std::pair<int, int>, double> distances;
     std::set<std::pair<int, int>> visited;
 
@@ -105,7 +101,7 @@ std::map<std::pair<int, int>, double> heuristic_map(
         
         // no valid target found
         if (!foundValid) {
-            std::cout << "No valid target in trajectory" << std::endl;
+            std::cout << "No valid target" << std::endl;
             return distances;
         }
     }
@@ -128,8 +124,8 @@ std::map<std::pair<int, int>, double> heuristic_map(
     int min_y = std::min(robotposeY, validTargetY);
     int max_y = std::max(robotposeY, validTargetY);
     
-    // Then expand by search radius
-    int search_radius = std::min(boundary_buffer, 
+    // Then expand by search radius - Increase the search radius
+    int search_radius = std::max(boundary_buffer, 
         (int)euclidean_heuristic(robotposeX, robotposeY, validTargetX, validTargetY));
     
     min_x = std::max(1, min_x - search_radius);
@@ -151,10 +147,6 @@ std::map<std::pair<int, int>, double> heuristic_map(
         double current_g = distances[current];
         OPEN.pop();
 
-        // Skip if already visited
-        if (visited.count(current) > 0) {
-            continue;
-        }
         visited.insert(current);
 
         // checks neighboring grids
@@ -181,12 +173,13 @@ std::map<std::pair<int, int>, double> heuristic_map(
         }
     }
 
-    cached_map = distances;
-    cached_targetX = validTargetX;
-    cached_targetY = validTargetY;
-    return distances; // returns map of coordinates, distances
+    return distances;
 }
 
+// Static cache for the heuristic map at planner level
+static std::map<std::pair<int, int>, double> cached_h_map;
+static bool h_map_initialized = false;
+static int mode = 1; 
 
 // planner
 void planner(
@@ -204,15 +197,52 @@ void planner(
     int* action_ptr
 )
 {
-    // Find min and max values in map
-    int min_val = map[0];
-    int max_val = map[0];
-    for(int i = 0; i < x_size * y_size; i++) {
-        if(map[i] < min_val) min_val = map[i];
-        if(map[i] > max_val) max_val = map[i];
+    // Calculate map area ratio
+    double map_area = x_size * y_size;
+    double area_ratio = map_area / 1000000.0;  // 1000 x 1000 map
+    // double area_ratio = 4.0;
+    
+    int goalposeX, goalposeY;
+    
+    // map is greater than 2 * (1000 x 1000)
+    if (area_ratio > 2.0) {
+        int num_modes = area_ratio;
+        // Calculate current target position based on mode
+        goalposeX = target_traj[(mode * target_steps)/num_modes]; 
+        goalposeY = target_traj[2*target_steps - 1 - ((num_modes-mode) * target_steps)/num_modes];
+        
+        // Calculate Manhattan distance to current goal
+        int manhattan_dist = abs(robotposeX - goalposeX) + abs(robotposeY - goalposeY);
+        int steps_remaining = target_steps - curr_time;
+        
+        // If distance to current goal is too high, move to next quarter
+        if (manhattan_dist > steps_remaining && mode < num_modes) {
+            mode++;
+            h_map_initialized = false;  // Reset to create new heuristic map
+            std::cout << "Moving to next target (mode " << mode << ")" << std::endl;
+            // Update goal for new mode
+            goalposeX = target_traj[(mode * target_steps)/num_modes];
+            goalposeY = target_traj[2*target_steps - 1 - ((num_modes-mode) * target_steps)/num_modes];
+        }
+    } else {
+        goalposeX = target_traj[target_steps - 1];
+        goalposeY = target_traj[2*target_steps - 1];
     }
 
-    int adaptive_epsilon = (max_val - min_val) / 1.2; // 2 doesn't work for map 5
+    // Initialize heuristic map only once
+    if (!h_map_initialized) {
+        cached_h_map = heuristic_map(map, collision_thresh, x_size, y_size, goalposeX, goalposeY, robotposeX, robotposeY, target_traj, target_steps);
+        h_map_initialized = true;
+    }
+    
+    // Use cached heuristic map
+    std::map<std::pair<int, int>, double>& h_map = cached_h_map;
+
+    // Find min and max values in map
+    int min_val = 0;
+    int max_val = collision_thresh;
+
+    int adaptive_epsilon = (max_val - min_val) / 2.0;
     // 1
     
     // weighted A*
@@ -221,36 +251,6 @@ void planner(
     // 8-connected grid
     int dX[NUMOFDIRS] = {-1, -1, -1,  0,  0,  1, 1, 1};
     int dY[NUMOFDIRS] = {-1,  0,  1, -1,  1, -1, 0, 1};
-    
-
-
-    // // set target to end of the target trajectory
-    // int goalposeX = target_traj[target_steps-1]; 
-    // int goalposeY = target_traj[2*target_steps-1];
-
-    // set initial target to 1/3 of the target trajectory
-    static int mode = 1;
-    // Mode reset
-    if (curr_time == 0) {
-        mode = 1;
-    }
-
-    // Calculate current target position based on mode
-    int goalposeX = target_traj[(mode * (target_steps)-1)/4];
-    int goalposeY = target_traj[2*(mode * (target_steps)-1)/4];
-
-    // if distance between current and goal is greater than 
-    int steps_to_target = ((mode * (target_steps-1))/4 - curr_time);
-    double distance_to_target = euclidean_heuristic(robotposeX, robotposeY, goalposeX, goalposeY);
-    
-    if (distance_to_target > steps_to_target * 0.6) {  // 0.6 switching at map7:3, switch at map7:187
-    // maybe use only when trajectory is extremely long
-        mode = std::min(mode + 1, 4);  // Ensure we don't exceed mode 4
-        std::cout << "Moving to next target (mode " << mode << ")" << std::endl;
-        goalposeX = target_traj[(mode * (target_steps)-1)/4];
-        goalposeY = target_traj[2*(mode * (target_steps)-1)/4];
-    }
-
 
     static std::set<std::pair<int, int>> visited_positions;
     visited_positions.insert({robotposeX, robotposeY});
@@ -264,16 +264,12 @@ void planner(
         return;
     }
 
- /* 
+ /**/   
     // if on target trajectory (that is in the future), follow trajectory backwards
     // static int last_trajectory_index = target_steps - 1; 
     int last_trajectory_index = target_steps - 1; 
 
-    // Reset index for new map
-    // if (curr_time == 0) {
-    //     last_trajectory_index = target_steps - 1;
-    // }
-    
+
     for (int i = last_trajectory_index; i > 0; i--) {
         // if on target trajectory and within 10 steps stay still
         if (robotposeX == target_traj[i] && robotposeY == target_traj[i+target_steps] && 0 < (i - curr_time) &&(i - curr_time) < 10) {
@@ -290,11 +286,7 @@ void planner(
             return;
         }
     }
-*/
 
-    // Initialize backward A* heuristic map
-    std::map<std::pair<int, int>, double> h_map = heuristic_map(map, collision_thresh, x_size, y_size, goalposeX, goalposeY, robotposeX, robotposeY, target_traj, target_steps);
-    
     // current position
     std::pair<int, int> current = std::make_pair(robotposeX, robotposeY);
     
@@ -326,7 +318,7 @@ void planner(
         double h = it->second;
         double h_euc = euclidean_heuristic(newx, newy, goalposeX, goalposeY);
         double g = map[(newy-1)*x_size + (newx-1)];  // Use 1-based coordinate conversion
-        double f = g + h * epsilon + h_euc * epsilon/2;
+        double f = g + h * epsilon + h_euc;
         
         if (f < best_f) {
             best_f = f;
@@ -345,6 +337,26 @@ void planner(
         action_ptr[0] = robotposeX;
         action_ptr[1] = robotposeY;
     }
+
+    // Reset visited positions when switching modes or when stuck
+    if (!h_map_initialized || visited_positions.size() > 100) {
+        visited_positions.clear();
+    }
+
+    // unstucking mechanism
+    static int last_x = -1, last_y = -1;
+    static int stuck_count = 0;
+    if (robotposeX == last_x && robotposeY == last_y) {
+        stuck_count++;
+        if (stuck_count > 5) {
+            visited_positions.clear();
+            stuck_count = 0;
+        }
+    } else {
+        stuck_count = 0;
+    }
+    last_x = robotposeX;
+    last_y = robotposeY;
 
     return;
 }
