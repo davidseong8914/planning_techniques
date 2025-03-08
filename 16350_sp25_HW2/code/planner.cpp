@@ -292,12 +292,18 @@ int IsValidArmConfiguration(double* angles, int numofDOFs, double*	map,
 	return 1;
 }
 
+/////////        /////////
+/// FUNCTIONS I ADDED  ///
+/////////        /////////
+
+// Node: joint combinations, parent index, cost
 struct Node {
 	double* joint_comb;
 	int parent;
 	double cost;
 };
 
+// calculates euclidean distance between 2 joint combinations
 double euclidean_distance (double* angles1, double* angles2, int numofDOFs) {
 	double dist = 0.0;
 	for (int i = 0; i < numofDOFs; i++) {
@@ -314,21 +320,18 @@ enum ExtendStatus {
     REACHED = 2
 };
 
+// interpolates points between 2 joint configs and checks if the "line" between them are valid
 bool isValidStraightLinePath(double* config1, double* config2, int numofDOFs, double* map, int x_size, int y_size, double step_size = 0.1) {
     double dist = euclidean_distance(config1, config2, numofDOFs);
     int num_steps = std::max(3, (int)(dist / step_size));
-    
     for (int i = 1; i < num_steps; i++) {
         double ratio = (double)i / num_steps;
         double* intermediate = new double[numofDOFs];
-        
         for (int j = 0; j < numofDOFs; j++) {
             intermediate[j] = config1[j] + ratio * (config2[j] - config1[j]);
         }
-        
         bool valid = IsValidArmConfiguration(intermediate, numofDOFs, map, x_size, y_size);
         delete[] intermediate;
-        
         if (!valid) {
             return false;
         }
@@ -337,6 +340,7 @@ bool isValidStraightLinePath(double* config1, double* config2, int numofDOFs, do
     return true;
 }
 
+// finds index of nearest neighbor of target node from nodes
 int nearest_neighbor(Node q_target, const std::vector<Node>& nodes, int numofDOFs) {
     int near_ind = 0;
     double min_dist = euclidean_distance(nodes[0].joint_comb, q_target.joint_comb, numofDOFs);
@@ -352,6 +356,7 @@ int nearest_neighbor(Node q_target, const std::vector<Node>& nodes, int numofDOF
     return near_ind;
 }
 
+// extend closest node from q_rand to q_rand
 ExtendStatus extend(std::vector<Node>& nodes, Node q_rand, double stepsize, int numofDOFs, double* map, int x_size, int y_size) {
 	int neighbor_node_idx = nearest_neighbor(q_rand, nodes, numofDOFs);
 
@@ -402,6 +407,7 @@ ExtendStatus extend(std::vector<Node>& nodes, Node q_rand, double stepsize, int 
     }
 }
 
+// connect to last added node 
 ExtendStatus connect(std::vector<Node>& nodes, const Node& q_target, double stepsize, int numofDOFs, double* map, int x_size, int y_size) {
     ExtendStatus status = ADVANCED;
     
@@ -426,11 +432,9 @@ ExtendStatus connect(std::vector<Node>& nodes, const Node& q_target, double step
             }
         }
         
-        // Check if we're close enough to target
         if (status == ADVANCED) {
             double dist = euclidean_distance(nodes[last_valid_node].joint_comb, q_target.joint_comb, numofDOFs);
             if (dist < stepsize * 0.5) {
-                // Verify final connection
                 if (isValidStraightLinePath(nodes[last_valid_node].joint_comb, 
                                            q_target.joint_comb, 
                                            numofDOFs, map, x_size, y_size)) {
@@ -447,22 +451,19 @@ ExtendStatus connect(std::vector<Node>& nodes, const Node& q_target, double step
 void shortcutPath(std::vector<std::vector<double>>& path, int numofDOFs, double* map, int x_size, int y_size, double stepsize) {
     if (path.size() <= 2) return; // Nothing to shortcut
     
-    // Save exact copies of start and goal configurations
+    // start and goal configurations
     std::vector<double> exact_start = path.front();
     std::vector<double> exact_goal = path.back();
     
-    // Create new path starting with the start configuration
+    // shortcut path - starting with start
     std::vector<std::vector<double>> newPath;
     newPath.push_back(exact_start);
     
-    // Start from the beginning
     int current = 0;
-    
     while (current < path.size() - 1) {
-        // Try connecting to the farthest possible node
         int furthest = current + 1;
         
-        // Test connections all the way to the end of the path
+		// try connecting to furthest point
         for (int test = path.size() - 1; test > current; test--) {
             if (isValidStraightLinePath(&path[current][0], &path[test][0], numofDOFs, map, x_size, y_size)) {
                 furthest = test;
@@ -470,7 +471,7 @@ void shortcutPath(std::vector<std::vector<double>>& path, int numofDOFs, double*
             }
         }
         
-        // Calculate distance for this segment
+        // calculate distance
         double dist = 0.0;
         for (int j = 0; j < numofDOFs; j++) {
             double diff = path[furthest][j] - path[current][j];
@@ -478,39 +479,35 @@ void shortcutPath(std::vector<std::vector<double>>& path, int numofDOFs, double*
         }
         dist = sqrt(dist);
         
-        // Calculate number of steps needed for interpolation
+		// add intermediate configurations for smooth movements
         int num_steps = std::max(1, (int)(dist / stepsize));
-        
-        // Add intermediate configurations between current and furthest
         for (int step = 1; step < num_steps; step++) {
             double ratio = (double)step / num_steps;
             std::vector<double> intermediate(numofDOFs);
-            
             for (int j = 0; j < numofDOFs; j++) {
                 intermediate[j] = path[current][j] + ratio * (path[furthest][j] - path[current][j]);
             }
-            
             newPath.push_back(intermediate);
         }
         
-        // Add the furthest reachable configuration (unless it's the goal)
+        // add furthest point
         if (furthest < path.size() - 1) {
             newPath.push_back(path[furthest]);
         }
         
-        // Move current to the furthest reached configuration
+        // restart with updated current
         current = furthest;
     }
     
-    // Ensure the goal is the last point
+    // add final point to end
     newPath.push_back(exact_goal);
     
-    // Replace the original path with the interpolated shortcut path
+    // update path to shortcut path
     path = newPath;
 }
 
-
-// for RRT*
+//// for RRT* ////
+// return indices of neighboring nodes
 std::vector<int> near_neighbors(const std::vector<Node>& nodes, int node_idx, double radius, int numofDOFs) {
     std::vector<int> neighbors;
     for (int i = 0; i < nodes.size(); i++) {
@@ -521,6 +518,7 @@ std::vector<int> near_neighbors(const std::vector<Node>& nodes, int node_idx, do
     return neighbors;
 }
 
+// choosing parent with lowest cost
 int choose_parent(std::vector<Node>& nodes, int new_node_idx, const std::vector<int>& near_indices, 
                  double* map, int x_size, int y_size, int numofDOFs) {
     int min_cost_idx = nodes[new_node_idx].parent;
@@ -537,17 +535,18 @@ int choose_parent(std::vector<Node>& nodes, int new_node_idx, const std::vector<
         }
     }
     
-    // Update parent and cost
+    // update parent and cost
     nodes[new_node_idx].parent = min_cost_idx;
     nodes[new_node_idx].cost = min_cost;
     
     return min_cost_idx;
 }
 
+// rewiring based on cost
 void rewire(std::vector<Node>& nodes, int new_node_idx, const std::vector<int>& near_indices, 
            double* map, int x_size, int y_size, int numofDOFs) {
     for (int near_idx : near_indices) {
-        // Skip parent
+        // skip parent
         if (near_idx == nodes[new_node_idx].parent) continue;
         
         double edge_cost = euclidean_distance(nodes[new_node_idx].joint_comb, nodes[near_idx].joint_comb, numofDOFs);
@@ -555,13 +554,14 @@ void rewire(std::vector<Node>& nodes, int new_node_idx, const std::vector<int>& 
         
         if (potential_cost < nodes[near_idx].cost && 
             isValidStraightLinePath(nodes[new_node_idx].joint_comb, nodes[near_idx].joint_comb, numofDOFs, map, x_size, y_size)) {
-            // Rewire: change parent and update cost
+            // rewire
             nodes[near_idx].parent = new_node_idx;
             nodes[near_idx].cost = potential_cost;
         }
     }
 }
 
+// allocating memory
 void allocatePlanMemory(double*** plan, int* planlength, 
                         const std::vector<std::vector<double>>& path, int numofDOFs) {
     *planlength = path.size();
@@ -595,7 +595,7 @@ static void planner(
 	std::vector<Node> nodes_goal;
 
 	// number of samples
-	int K = 150000;
+	int K = 200000;
 	// how often to generate biased node
 	int bias_check = 40;
 	// angle change step size
@@ -611,7 +611,7 @@ static void planner(
 	for (int i = 0; i < numofDOFs; i++) {
 		q_init.joint_comb[i] = armstart_anglesV_rad[i];
 	}
-	//set index
+	// set index
 	q_init.parent = -1;
 
 	// final node
@@ -622,8 +622,8 @@ static void planner(
 	}
 
 	// generate random angle between 0 - 2pi
-	std::random_device rd;  // Used to obtain a seed for the random number engine
-	std::mt19937 gen(rd()); // Standard mersenne_twister_engine
+	std::random_device rd;  
+	std::mt19937 gen(rd()); 
 	std::uniform_real_distribution<double> distribution(0.0, 2.0 * PI);
 
 	// Time tracker
@@ -638,7 +638,7 @@ static void planner(
 		nodes.push_back(q_init);
 		bool goal_reached = false;
 
-		// random sampling (need to make it biased towards goal)
+		// random sampling 
 		for (int k = 0; k < K; k++) {
 			Node q_rand;
 			q_rand.joint_comb = new double [numofDOFs];
@@ -711,10 +711,6 @@ static void planner(
 			}
 			path.push_back(config);
 		}
-		
-		// Make sure start and end points are exact
-		path[0] = std::vector<double>(armstart_anglesV_rad, armstart_anglesV_rad + numofDOFs);
-		path[path.size()-1] = std::vector<double>(armgoal_anglesV_rad, armgoal_anglesV_rad + numofDOFs);
 		
 		numVertices = nodes.size();
 		shortcutPath(path, numofDOFs, map, x_size, y_size, stepsize);
