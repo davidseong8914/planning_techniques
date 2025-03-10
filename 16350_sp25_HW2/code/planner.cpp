@@ -12,6 +12,9 @@ python visualizer.py myOutput.txt --gifFilepath=myGif.gif
 
 Run for testing:
 ./planner.out map2.txt 5 0.54,2.30,2.36,4.12,4.34 1.12,0.02,3.37,2.52,4.91 0 myOutput.txt
+g++ -std=c++17 verifier.cpp -o verifier.out
+python grader.py
+
 */
 
 #include <math.h>
@@ -601,13 +604,13 @@ static void planner(
 	std::vector<Node> nodes_goal;
 
 	// number of samples
-	int K = 500000;
+	int K = 1000000;
 	// how often to generate biased node
 	int bias_check = 20;
 	// angle change step size
 	double epsilon = PI/20;
 	// step size for visualization
-	double stepsize = PI/20;
+	double stepsize = PI/5;
 
 	// initial  node
 	Node q_init;
@@ -937,6 +940,7 @@ static void planner(
 
 	// RRT* : planner id = 2
 	else if (whichPlanner == 2) {
+		K = K / 5;
 		q_init.cost = 0.0;
 		nodes.push_back(q_init);
 		bool goal_reached = false;
@@ -946,10 +950,6 @@ static void planner(
 		double gamma = 2.0;
 
 		for (int k = 0; k < K; k++) {
-
-			if (k % 1000 == 0) {
-            	std::cout << "Iteration " << k << ", nodes: " << nodes.size() << std::endl;
-        	}
 
 			Node q_rand;
 			q_rand.joint_comb = new double[numofDOFs];
@@ -1063,9 +1063,9 @@ static void planner(
 
 	//PRM : planner id = 3
 	else if (whichPlanner == 3) {
-		int n_sample = K/2;
+		int n_sample = K/5;
 		double connect_radius = std::min(4 * epsilon, std::sqrt(numofDOFs) * std::pow(std::log(nodes.size()) / nodes.size(), 1.0/numofDOFs));
-		int max_neighbor = 1;
+		int max_neighbor = 10;
 
 		q_init.cost = 0.0;
 		q_init.parent = -1;
