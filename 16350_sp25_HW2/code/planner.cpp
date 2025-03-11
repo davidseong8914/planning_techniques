@@ -602,7 +602,7 @@ static void planner(
 	std::vector<Node> nodes_goal;
 
 	// number of samples
-	int K = 500000;
+	int K = 100000;
 	// how often to generate biased node
 	int bias_check = 20;
 	// angle change step size
@@ -925,7 +925,7 @@ static void planner(
 		int goal_node_idx = -1;
 		double best_cost = INFINITY;
 
-		double gamma = 2.0;
+		double gamma = 1.0;
 
 		for (int k = 0; k < K; k++) {
 
@@ -947,7 +947,7 @@ static void planner(
 			delete[] q_rand.joint_comb;
 			
 			if (status != TRAPPED) {
-				double radius = std::min(gamma * std::pow(std::log(nodes.size()) / nodes.size(), 1.0/numofDOFs), epsilon * 2.0);
+				double radius = std::min(gamma * std::pow(std::log(nodes.size()) / nodes.size(), 1.0/numofDOFs), 1.0);
 				std::vector<int> near_indices = near_neighbors(nodes, nodes.size()-1, radius, numofDOFs);
 				
 				choose_parent(nodes, nodes.size()-1, near_indices, map, x_size, y_size, numofDOFs);
@@ -1042,7 +1042,7 @@ static void planner(
 	
 	//PRM : planner id = 3
 	else if (whichPlanner == 3) {
-		int n_sample = K/5; // K/2 takes too long
+		int n_sample = K; // K/2 takes too long
 		double connect_radius = std::min(4 * epsilon, std::sqrt(numofDOFs) * std::pow(std::log(nodes.size()) / nodes.size(), 1.0/numofDOFs));
 		int max_neighbor = 5; // 10 takes too long
 
