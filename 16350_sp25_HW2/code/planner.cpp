@@ -300,12 +300,6 @@ int IsValidArmConfiguration(double* angles, int numofDOFs, double*	map,
 /// FUNCTIONS I ADDED  ///
 /////////        /////////
 
-// wrap angles 
-double wrap_angle(double angle) {
-	while (angle > PI) angle -= 2 * PI;
-	while (angle < PI) angle += 2 * PI;
-	return angle;
-}
 
 // Node: joint combinations, parent index, cost
 struct Node {
@@ -350,9 +344,9 @@ bool isConfigWithinBounds(double* angles, int numofDOFs, int x_size, int y_size)
 }
 
 // interpolates points between 2 joint configs and checks if the "line" between them are valid
-bool isValidStraightLinePath(double* config1, double* config2, int numofDOFs, double* map, int x_size, int y_size, double step_size = 0.5) {
+bool isValidStraightLinePath(double* config1, double* config2, int numofDOFs, double* map, int x_size, int y_size, double step_size = 0.05) {
     double dist = euclidean_distance(config1, config2, numofDOFs);
-    int num_steps = std::max(1, (int)(dist / step_size));
+    int num_steps = std::max(3, (int)(dist / step_size));
     for (int i = 1; i < num_steps; i++) {
         double ratio = (double)i / num_steps;
         double* intermediate = new double[numofDOFs];
@@ -461,54 +455,28 @@ void shortcutPath(std::vector<std::vector<double>>& path, int numofDOFs, double*
     
     // shortcut path - starting with start
     std::vector<std::vector<double>> newPath;
-    newPath.push_back(exact_start);
+    newPath.push_back(path.front());
     
-    int current = 0;
-    while (current < path.size() - 1) {
-        int furthest = current + 1;
-        
-		// try connecting to furthest point
-        for (int test = path.size() - 1; test > current; test--) {
-            if (isValidStraightLinePath(&path[current][0], &path[test][0], numofDOFs, map, x_size, y_size)) {
-                furthest = test;
+    int i = 0;
+    while (i < path.size() - 1) {
+        int j;
+        // find the furthest valid connection from current point
+        for (j = path.size() - 1; j > i + 1; j--) {
+            if (isValidStraightLinePath(&path[i][0], &path[j][0], numofDOFs, map, x_size, y_size, 0.05)) {
                 break;
             }
         }
-        
-        // calculate distance
-        double dist = 0.0;
-        for (int j = 0; j < numofDOFs; j++) {
-            double diff = path[furthest][j] - path[current][j];
-            dist += diff * diff;
-        }
-        dist = sqrt(dist);
-        
-		// add intermediate configurations for smooth movements
-        int num_steps = std::max(1, (int)(dist / stepsize));
-        for (int step = 1; step < num_steps; step++) {
-            double ratio = (double)step / num_steps;
-            std::vector<double> intermediate(numofDOFs);
-            for (int j = 0; j < numofDOFs; j++) {
-                intermediate[j] = path[current][j] + ratio * (path[furthest][j] - path[current][j]);
-            }
-            newPath.push_back(intermediate);
-        }
-        
-        // add furthest point
-        if (furthest < path.size() - 1) {
-            newPath.push_back(path[furthest]);
-        }
-        
-        // restart with updated current
-        current = furthest;
+        newPath.push_back(path[j]);
+        i = j; 
+    }
+        if (newPath.back() != path.back()) {
+        newPath.push_back(path.back());
     }
     
-    // add final point to end
-    newPath.push_back(exact_goal);
-    
-    // update path to shortcut path
+    // update path
     path = newPath;
 }
+    
 
 //// for RRT* ////
 // return indices of neighboring nodes
@@ -609,11 +577,11 @@ static void planner(
 	std::vector<Node> nodes_goal;
 
 	// number of samples
-	int K = 100000;
+	int K = 50000;
 	// how often to generate biased node
 	int bias_check = 20;
 	// angle change step size
-	double epsilon = PI/6;
+	double epsilon = PI/5;
 	// step size for visualization
 	double stepsize = PI/10;
 	// shortcut
@@ -738,8 +706,11 @@ static void planner(
 		}
 		
 		allocatePlanMemory(plan, planlength, path, numofDOFs);
-		
 		std::cout << "Path length: " << path.size() << std::endl;
+
+		for (int i = 0; i < numofDOFs; ++i) {
+			(*plan)[*planlength - 1][i] = armgoal_anglesV_rad[i];
+		}
 		
 		// cleanup
 		for (size_t i = 0; i < nodes.size(); i++) {
@@ -913,6 +884,10 @@ static void planner(
 			
 			allocatePlanMemory(plan, planlength, path, numofDOFs);
 		}
+
+		for (int i = 0; i < numofDOFs; ++i) {
+			(*plan)[*planlength - 1][i] = armgoal_anglesV_rad[i];
+		}
 		
 		// cleanup
 		for (size_t i = 0; i < nodes_init.size(); i++) {
@@ -925,7 +900,7 @@ static void planner(
 
 	// RRT* : planner id = 2
 	else if (whichPlanner == 2) {
-		K = K / 5;
+		K = K;
 		q_init.cost = 0.0;
 		nodes.push_back(q_init);
 		bool goal_reached = false;
@@ -1037,6 +1012,10 @@ static void planner(
 			
 			allocatePlanMemory(plan, planlength, path, numofDOFs);
 			
+			for (int i = 0; i < numofDOFs; ++i) {
+				(*plan)[*planlength - 1][i] = armgoal_anglesV_rad[i];
+			}
+
 			std::cout << "Path length: " << path.size() << std::endl;
 			
 			for (size_t i = 0; i < nodes.size(); i++) {
@@ -1049,7 +1028,7 @@ static void planner(
 	
 	//PRM : planner id = 3
 	else if (whichPlanner == 3) {
-		int n_sample = K/2; // K/2 takes too long
+		int n_sample = K; 
 		double connect_radius = std::min(4 * epsilon, std::sqrt(numofDOFs) * std::pow(std::log(nodes.size()) / nodes.size(), 1.0/numofDOFs));
 		int max_neighbor = 10; // 10 takes too long
 
@@ -1217,7 +1196,11 @@ static void planner(
 				std::cout << "Path length: " << path.size() << std::endl;
 			}
 		}
-		
+
+		for (int i = 0; i < numofDOFs; ++i) {
+			(*plan)[*planlength - 1][i] = armgoal_anglesV_rad[i];
+		}
+
 		// cleanup
 		for (size_t i = 0; i < nodes.size(); i++) {
 			delete[] nodes[i].joint_comb;
