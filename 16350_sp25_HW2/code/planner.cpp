@@ -34,6 +34,7 @@ python grader.py
 // ones I added
 #include <random>
 #include <set>
+#include <queue>
 
 /* Input Arguments */
 #define	MAP_IN      prhs[0]
@@ -342,9 +343,9 @@ bool isConfigWithinBounds(double* angles, int numofDOFs, int x_size, int y_size)
 }
 
 // interpolates points between 2 joint configs and checks if the "line" between them are valid
-bool isValidStraightLinePath(double* config1, double* config2, int numofDOFs, double* map, int x_size, int y_size, double step_size = 0.1) {
+bool isValidStraightLinePath(double* config1, double* config2, int numofDOFs, double* map, int x_size, int y_size, double step_size = 0.5) {
     double dist = euclidean_distance(config1, config2, numofDOFs);
-    int num_steps = std::max(3, (int)(dist / step_size));
+    int num_steps = std::max(2, (int)(dist / step_size));
     for (int i = 1; i < num_steps; i++) {
         double ratio = (double)i / num_steps;
         double* intermediate = new double[numofDOFs];
@@ -398,21 +399,19 @@ ExtendStatus extend(std::vector<Node>& nodes, Node q_rand, double stepsize, int 
 
 	magnitude = sqrt(magnitude);
 
-    if (magnitude <= stepsize) {
-        // if closer than stepsize, directly to target
-        for (int i = 0; i < numofDOFs; i++) {
+	bool reached = magnitude <= stepsize;
+
+    for (int i = 0; i < numofDOFs; i++) {
+        if (reached) {
             q_new.joint_comb[i] = q_rand.joint_comb[i];
+        } else {
+            q_new.joint_comb[i] = nodes[neighbor_node_idx].joint_comb[i] + 
+                                 (direction_vector[i] / magnitude) * stepsize;
         }
-		q_new.cost = nodes[neighbor_node_idx].cost + (magnitude <= stepsize ? magnitude : stepsize);
-
-    } else {
-        // stepsize towards target
-        for (int i = 0; i < numofDOFs; i++) {
-            q_new.joint_comb[i] = nodes[neighbor_node_idx].joint_comb[i] + (direction_vector[i] / magnitude) * stepsize;
-        }
-		q_new.cost = nodes[neighbor_node_idx].cost + (magnitude <= stepsize ? magnitude : stepsize);
-
     }
+
+	q_new.cost = nodes[neighbor_node_idx].cost + (reached ? magnitude : stepsize);
+
 
 	// if outside of map
     if (!isConfigWithinBounds(q_new.joint_comb, numofDOFs, x_size, y_size)) {
@@ -420,11 +419,11 @@ ExtendStatus extend(std::vector<Node>& nodes, Node q_rand, double stepsize, int 
         return TRAPPED;
     }
 
-    // Check both the configuration itself AND the transition path
+    //check both the configuration, transition path
     if (IsValidArmConfiguration(q_new.joint_comb, numofDOFs, map, x_size, y_size) && 
         isValidStraightLinePath(nodes[neighbor_node_idx].joint_comb, q_new.joint_comb, numofDOFs, map, x_size, y_size)) {
         nodes.push_back(q_new);
-        if (magnitude <= stepsize) {
+        if (reached) {
             return REACHED;
         }
         return ADVANCED;
@@ -557,10 +556,9 @@ void rewire(std::vector<Node>& nodes, int new_node_idx, const std::vector<int>& 
             double edge_cost = euclidean_distance(nodes[new_node_idx].joint_comb, nodes[near_idx].joint_comb, numofDOFs);
             double potential_cost = nodes[new_node_idx].cost + edge_cost;
             
-            // If new path is better, rewire
+            // rewire
             if (potential_cost < nodes[near_idx].cost) {
-                // Remove old edge (parent relationship is implicit)
-                // Add new edge
+                // add new edge
                 nodes[near_idx].parent = new_node_idx;
                 nodes[near_idx].cost = potential_cost;
             }
@@ -604,13 +602,16 @@ static void planner(
 	std::vector<Node> nodes_goal;
 
 	// number of samples
-	int K = 1000000;
+	int K = 500000;
 	// how often to generate biased node
 	int bias_check = 20;
 	// angle change step size
-	double epsilon = PI/20;
+	double epsilon = PI/10;
 	// step size for visualization
-	double stepsize = PI/5;
+	double stepsize = PI/10;
+	// shortcut
+	bool shortcut = true;
+	// can also adjust {stepsize} for valid straight line path
 
 	// initial  node
 	Node q_init;
@@ -635,12 +636,12 @@ static void planner(
 	std::mt19937 gen(rd()); 
 	std::uniform_real_distribution<double> distribution(0.0, 2.0 * PI);
 
-	// Time tracker
-	auto startTime = std::chrono::high_resolution_clock::now();
-	// Path cost tracker
+	// path cost track
 	double pathCost = 0.0;
-	// Vertices tracker
+	// generated vertex track
 	int numVertices = 0;
+	// time track
+	auto startTime = std::chrono::high_resolution_clock::now();
 
 	// RRT : planner id = 0
 	if (whichPlanner == 0) {
@@ -711,7 +712,6 @@ static void planner(
 
 		std::reverse(RRT_path.begin(), RRT_path.end());
 		
-		// Convert path indices to configuration vectors for smoothing
 		std::vector<std::vector<double>> path;
 		for (int idx : RRT_path) {
 			std::vector<double> config(numofDOFs);
@@ -724,8 +724,11 @@ static void planner(
 		numVertices = nodes.size();
 
 		std::cout << "Path before shortcut: " << path.size() << " points" << std::endl;
-		shortcutPath(path, numofDOFs, map, x_size, y_size, stepsize);
-		std::cout << "Path after shortcut: " << path.size() << " points" << std::endl;
+
+		if (shortcut) {
+			shortcutPath(path, numofDOFs, map, x_size, y_size, stepsize);
+			std::cout << "Path after shortcut: " << path.size() << " points" << std::endl;
+		}
 		
 		allocatePlanMemory(plan, planlength, path, numofDOFs);
 		
@@ -752,95 +755,72 @@ static void planner(
 		int connect_goal_idx = -1;
 		bool connection = false;
 		
-		// Try direct connection first
+		// direct connection
 		if (isValidStraightLinePath(q_init.joint_comb, q_goal.joint_comb, numofDOFs, map, x_size, y_size)) {
 			connection = true;
 			connect_init_idx = 0;
 			connect_goal_idx = 0;
 		} else {
-			// Main RRT-Connect loop
 			for (int k = 0; k < K && !connection; k++) {
 				// Define trees - Swap trees in each iteration
 				std::vector<Node>& tree_a = (k % 2 == 0) ? nodes_init : nodes_goal;
 				std::vector<Node>& tree_b = (k % 2 == 0) ? nodes_goal : nodes_init;
 				
-				// Generate random configuration
 				Node q_rand;
 				q_rand.joint_comb = new double[numofDOFs];
 				
 				if (k % bias_check == 0) {
-					// Bias toward goal occasionally
+					// bias... start as well?
 					for (int i = 0; i < numofDOFs; i++) {
 						q_rand.joint_comb[i] = (k % 2 == 0) ? q_goal.joint_comb[i] : q_init.joint_comb[i];
 					}
 				} else {
-					// Random configuration
 					for (int i = 0; i < numofDOFs; i++) {
 						q_rand.joint_comb[i] = distribution(gen);
 					}
 				}
 				
-				// Extend tree_a toward random sample (following the pseudocode)
 				int tree_a_size_before = tree_a.size();
-				ExtendStatus status_a = extend(tree_a, q_rand, epsilon, numofDOFs, map, x_size, y_size);
-				
-				if (status_a != TRAPPED) {
-					// Get the new node added to tree_a
-					Node q_new;
-					q_new.joint_comb = new double[numofDOFs];
-					for (int i = 0; i < numofDOFs; i++) {
-						q_new.joint_comb[i] = tree_a.back().joint_comb[i];
-					}
-					
-					// Try to connect tree_b to this new node using CONNECT
-					ExtendStatus status_b = connect(tree_b, q_new, epsilon, numofDOFs, map, x_size, y_size);
-					
-					if (status_b == REACHED) {
-						// Connection successful!
-						connection = true;
-						
-						// Store indices for path reconstruction
-						if (k % 2 == 0) {
-							connect_init_idx = tree_a.size() - 1;
-							connect_goal_idx = tree_b.size() - 1;
-						} else {
-							connect_init_idx = tree_b.size() - 1;
-							connect_goal_idx = tree_a.size() - 1;
-						}
-					}
-					
-					delete[] q_new.joint_comb;
-				}
-				
-				delete[] q_rand.joint_comb;
-			}
-		}
+            if (extend(tree_a, q_rand, epsilon, numofDOFs, map, x_size, y_size) != TRAPPED) {
+                Node& q_new = tree_a.back();
+                
+                // Eearly termination if connected
+                if (connect(tree_b, q_new, epsilon, numofDOFs, map, x_size, y_size) == REACHED) {
+                    connection = true;
+                    connect_init_idx = (k % 2 == 0) ? tree_a.size() - 1 : tree_b.size() - 1;
+                    connect_goal_idx = (k % 2 == 0) ? tree_b.size() - 1 : tree_a.size() - 1;
+                    delete[] q_rand.joint_comb;
+                    break;
+                }
+            }
+            
+            delete[] q_rand.joint_comb;
+        }
+		}				
+		
 		
 		if (connection) {
 			std::cout << "Goal reached with planner 1: RRT-Connect" << std::endl;
 			
 			std::vector<std::vector<double>> path;
 			
-			// Add exact start configuration
 			std::vector<double> exact_start(numofDOFs);
 			for (int i = 0; i < numofDOFs; i++) {
 				exact_start[i] = armstart_anglesV_rad[i];
 			}
 			path.push_back(exact_start);
 			
-			// If direct connection wasn't possible, construct the full path
 			if (connect_init_idx != 0 || connect_goal_idx != 0) {
-				// Nodes from init tree (except start node)
+				// nodes from init tree (except start node)
 				std::vector<int> init_path;
 				int current = connect_init_idx;
 				
-				// Trace back from connection point to start (excluding start)
+				// connection to start
 				while (current != 0) {
 					init_path.push_back(current);
 					current = nodes_init[current].parent;
 				}
 				
-				// Add init path in reverse order (from start toward connection)
 				for (int i = init_path.size() - 1; i >= 0; i--) {
 					std::vector<double> config(numofDOFs);
 					for (int j = 0; j < numofDOFs; j++) {
@@ -849,17 +829,16 @@ static void planner(
 					path.push_back(config);
 				}
 				
-				// Nodes from goal tree (except goal node)
+				
 				std::vector<int> goal_path;
 				current = connect_goal_idx;
 				
-				// Collect nodes from connection point toward goal (excluding goal)
+				// conection to goal
 				while (current != 0) {
 					goal_path.push_back(current);
 					current = nodes_goal[current].parent;
 				}
 				
-				// Add goal path in forward order (from connection toward goal)
 				for (int i = goal_path.size() - 1; i >= 0; i--) {
 					std::vector<double> config(numofDOFs);
 					for (int j = 0; j < numofDOFs; j++) {
@@ -869,7 +848,6 @@ static void planner(
 				}
 			}
 			
-			// Add exact goal configuration
 			std::vector<double> exact_goal(numofDOFs);
 			for (int i = 0; i < numofDOFs; i++) {
 				exact_goal[i] = armgoal_anglesV_rad[i];
@@ -879,13 +857,17 @@ static void planner(
 			numVertices = nodes_init.size() + nodes_goal.size();
 			
 			std::cout << "Path before shortcut: " << path.size() << " points" << std::endl;
-			shortcutPath(path, numofDOFs, map, x_size, y_size, stepsize);
-			std::cout << "Path after shortcut: " << path.size() << " points" << std::endl;
+
+			if (shortcut) {
+				shortcutPath(path, numofDOFs, map, x_size, y_size, stepsize);
+				std::cout << "Path after shortcut: " << path.size() << " points" << std::endl;
+			}
 			
 			allocatePlanMemory(plan, planlength, path, numofDOFs);
 		} else {
 			std::cout << "Goal not reached with planner 1: RRT-Connect" << std::endl;			
-			// Create a minimal valid plan to prevent segfault
+			
+			// segfault prevention
 			std::vector<std::vector<double>> path;
 			std::vector<double> start_config(numofDOFs);
 			for (int i = 0; i < numofDOFs; i++) {
@@ -893,7 +875,6 @@ static void planner(
 			}
 			path.push_back(start_config);
 			
-			// Find closest node to goal
 			int closest_idx = 0;
 			double min_dist = INFINITY;
 			for (int i = 0; i < nodes_init.size(); i++) {
@@ -904,7 +885,6 @@ static void planner(
 				}
 			}
 			
-			// Trace path from closest node to root
 			std::vector<int> path_indices;
 			int current = closest_idx;
 			while (current != -1) {
@@ -912,7 +892,6 @@ static void planner(
 				current = nodes_init[current].parent;
 			}
 			
-			// Add path points 
 			for (int i = path_indices.size() - 1; i >= 0; i--) {
 				std::vector<double> config(numofDOFs);
 				for (int j = 0; j < numofDOFs; j++) {
@@ -921,7 +900,6 @@ static void planner(
 				path.push_back(config);
 			}
 			
-			// Add duplicated goal as second point if path is empty
 			if (path.size() < 2) {
 				path.push_back(start_config);
 			}
@@ -985,11 +963,11 @@ static void planner(
 								
 						if (!goal_reached || potential_goal_cost < best_cost) {
 							if (goal_reached) {
-								// Update existing goal node if it exists
+								// update existing goal node if it exists
 								nodes[goal_node_idx].parent = nodes.size() - 1;
 								nodes[goal_node_idx].cost = potential_goal_cost;
 							} else {
-								// Add new goal node
+								// add new goal node
 								q_goal.parent = nodes.size() - 1;
 								q_goal.cost = potential_goal_cost;
 								nodes.push_back(q_goal);
@@ -1045,8 +1023,10 @@ static void planner(
 			numVertices = nodes.size();
 
 			std::cout << "Path before shortcut: " << path.size() << " points" << std::endl;
-			shortcutPath(path, numofDOFs, map, x_size, y_size, stepsize);
-			std::cout << "Path after shortcut: " << path.size() << " points" << std::endl;
+			if (shortcut) {
+				shortcutPath(path, numofDOFs, map, x_size, y_size, stepsize);
+				std::cout << "Path after shortcut: " << path.size() << " points" << std::endl;
+			}
 			
 			allocatePlanMemory(plan, planlength, path, numofDOFs);
 			
@@ -1060,12 +1040,11 @@ static void planner(
 		}
 	
 	
-
 	//PRM : planner id = 3
 	else if (whichPlanner == 3) {
-		int n_sample = K/5;
+		int n_sample = K/5; // K/2 takes too long
 		double connect_radius = std::min(4 * epsilon, std::sqrt(numofDOFs) * std::pow(std::log(nodes.size()) / nodes.size(), 1.0/numofDOFs));
-		int max_neighbor = 10;
+		int max_neighbor = 5; // 10 takes too long
 
 		q_init.cost = 0.0;
 		q_init.parent = -1;
@@ -1102,9 +1081,9 @@ static void planner(
 			std::vector<double> goal_config(numofDOFs);
 			
 			for (int i = 0; i < numofDOFs; i++) {
-            	start_config[i] = armstart_anglesV_rad[i];
-            	goal_config[i] = armgoal_anglesV_rad[i];
-        	}
+				start_config[i] = armstart_anglesV_rad[i];
+				goal_config[i] = armgoal_anglesV_rad[i];
+			}
 
 			path.push_back(start_config);
 			path.push_back(goal_config);
@@ -1141,51 +1120,50 @@ static void planner(
 				}
 			}
 
-			// A*
+			// A* with priority queue
 			std::vector<double> dist(nodes.size(), INFINITY);
 			std::vector<int> prev(nodes.size(), -1);
 			std::vector<bool> visited(nodes.size(), false);
 
+			// Priority queue of pairs: (distance, node index)
+			std::priority_queue<std::pair<double, int>, 
+							std::vector<std::pair<double, int>>, 
+							std::greater<std::pair<double, int>>> pq;
+
 			dist[0] = 0; 
+			pq.push({0, 0});
 
-			for (int count = 0; count < nodes.size(); count++) {
-				// Find unvisited node with minimum distance
-				double min_dist = INFINITY;
-				int min_idx = -1;
-
-				for (int i = 0; i < nodes.size(); i++) {
-					if (!visited[i] && dist[i] < min_dist) {
-						min_dist = dist[i];
-						min_idx = i;
-					}
-				}
-
-				if (min_idx == -1) {
-					break;
-				}
-
-				// mark node as visited
+			while (!pq.empty()) {
+	
+				int min_idx = pq.top().second;
+				double min_dist = pq.top().first;
+				pq.pop();
+				
+				// skip visited
+				if (visited[min_idx]) continue;
+				
 				visited[min_idx] = true;
-
+				
 				// goal reached
 				if (min_idx == 1) {
 					std::cout << "Goal reached with planner 3: PRM " << std::endl;
 					break;
 				}
-
-				// update distances to neighbors
+				
+				// distance update
 				for (int neighbor : neighbors[min_idx]) {
 					double edge_cost = euclidean_distance(nodes[min_idx].joint_comb, nodes[neighbor].joint_comb, numofDOFs);
 					double path_cost = dist[min_idx] + edge_cost;
-
-					if (path_cost < dist[neighbor]) {
+					
+					if (!visited[neighbor] && path_cost < dist[neighbor]) {
 						dist[neighbor] = path_cost;
 						prev[neighbor] = min_idx;
+						pq.push({dist[neighbor], neighbor});
 					}
 				}
 			}
 
-			// Check if path to goal exists
+			// goal path check
 			if (prev[1] == -1 || dist[1] == INFINITY) {
 				std::cout << "Goal not reached with planner 3: PRM " << std::endl;
 
@@ -1195,12 +1173,12 @@ static void planner(
 				allocatePlanMemory(plan, planlength, path, numofDOFs);
 				
 				pathCost = euclidean_distance(armstart_anglesV_rad, armgoal_anglesV_rad, numofDOFs);
-			    numVertices = nodes.size();
+				numVertices = nodes.size();
 
 			} else {
 				// reconstruct path
 				std::vector<int> path_indices;
-				int current = 1; // Goal index
+				int current = 1; 
 
 				while (current != -1) {
 					path_indices.push_back(current);
@@ -1221,8 +1199,11 @@ static void planner(
 				numVertices = nodes.size();
 
 				std::cout << "Path before shortcut: " << path.size() << " points" << std::endl;
-				shortcutPath(path, numofDOFs, map, x_size, y_size, stepsize);
-				std::cout << "Path after shortcut: " << path.size() << " points" << std::endl;
+
+				if (shortcut) {
+					shortcutPath(path, numofDOFs, map, x_size, y_size, stepsize);
+					std::cout << "Path after shortcut: " << path.size() << " points" << std::endl;
+				}
 				
 				allocatePlanMemory(plan, planlength, path, numofDOFs);
 
@@ -1230,15 +1211,15 @@ static void planner(
 			}
 		}
 		
-		// Cleanup
+		// cleanup
 		for (size_t i = 0; i < nodes.size(); i++) {
 			delete[] nodes[i].joint_comb;
 		}
 	}
-	
+		
 
 	else {
-		// planner not specified
+		
 	}
 
 	// calculate planning time
