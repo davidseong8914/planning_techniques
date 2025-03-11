@@ -345,7 +345,7 @@ bool isConfigWithinBounds(double* angles, int numofDOFs, int x_size, int y_size)
 // interpolates points between 2 joint configs and checks if the "line" between them are valid
 bool isValidStraightLinePath(double* config1, double* config2, int numofDOFs, double* map, int x_size, int y_size, double step_size = 0.5) {
     double dist = euclidean_distance(config1, config2, numofDOFs);
-    int num_steps = std::max(2, (int)(dist / step_size));
+    int num_steps = std::max(1, (int)(dist / step_size));
     for (int i = 1; i < num_steps; i++) {
         double ratio = (double)i / num_steps;
         double* intermediate = new double[numofDOFs];
@@ -606,7 +606,7 @@ static void planner(
 	// how often to generate biased node
 	int bias_check = 20;
 	// angle change step size
-	double epsilon = PI/10;
+	double epsilon = PI/3;
 	// step size for visualization
 	double stepsize = PI/10;
 	// shortcut
@@ -1042,9 +1042,9 @@ static void planner(
 	
 	//PRM : planner id = 3
 	else if (whichPlanner == 3) {
-		int n_sample = K; // K/2 takes too long
+		int n_sample = K/2; // K/2 takes too long
 		double connect_radius = std::min(4 * epsilon, std::sqrt(numofDOFs) * std::pow(std::log(nodes.size()) / nodes.size(), 1.0/numofDOFs));
-		int max_neighbor = 5; // 10 takes too long
+		int max_neighbor = 10; // 10 takes too long
 
 		q_init.cost = 0.0;
 		q_init.parent = -1;
