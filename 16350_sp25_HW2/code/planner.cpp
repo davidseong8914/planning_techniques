@@ -300,6 +300,13 @@ int IsValidArmConfiguration(double* angles, int numofDOFs, double*	map,
 /// FUNCTIONS I ADDED  ///
 /////////        /////////
 
+// wrap angles 
+double wrap_angle(double angle) {
+	while (angle > PI) angle -= 2 * PI;
+	while (angle < PI) angle += 2 * PI;
+	return angle;
+}
+
 // Node: joint combinations, parent index, cost
 struct Node {
 	double* joint_comb;
@@ -606,7 +613,7 @@ static void planner(
 	// how often to generate biased node
 	int bias_check = 20;
 	// angle change step size
-	double epsilon = PI/3;
+	double epsilon = PI/6;
 	// step size for visualization
 	double stepsize = PI/10;
 	// shortcut
@@ -634,7 +641,7 @@ static void planner(
 	// generate random angle between 0 - 2pi
 	std::random_device rd;  
 	std::mt19937 gen(rd()); 
-	std::uniform_real_distribution<double> distribution(0.0, 2.0 * PI);
+	std::uniform_real_distribution<double> distribution(-PI, PI);
 
 	// path cost track
 	double pathCost = 0.0;
@@ -1224,8 +1231,8 @@ static void planner(
 
 	// calculate planning time
 	auto endTime = std::chrono::high_resolution_clock::now();
-	auto planTime = std::chrono::duration_cast<std::chrono::seconds>(endTime - startTime).count();
-	std::cout << "Planning time: " << planTime << " s" << std::endl;
+	auto planTime = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
+	std::cout << "Planning time: " << planTime << " ms" << std::endl;
 
 	// calculate path cost
 	for (int i = 1; i < *planlength; i++) {
