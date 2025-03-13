@@ -14,7 +14,6 @@ Run for testing:
 ./planner.out map2.txt 5 0.54,2.30,2.36,4.12,4.34 1.12,0.02,3.37,2.52,4.91 0 myOutput.txt
 g++ -std=c++17 verifier.cpp -o verifier.out
 python grader.py
-
 */
 
 #include <math.h>
@@ -399,7 +398,6 @@ ExtendStatus extend(std::vector<Node>& nodes, Node q_rand, double stepsize, int 
 	}
 
 	magnitude = sqrt(magnitude);
-
 	bool reached = magnitude <= stepsize;
 
     for (int i = 0; i < numofDOFs; i++) {
@@ -410,16 +408,13 @@ ExtendStatus extend(std::vector<Node>& nodes, Node q_rand, double stepsize, int 
                                  (direction_vector[i] / magnitude) * stepsize;
         }
     }
-
-	q_new.cost = nodes[neighbor_node_idx].cost + (reached ? magnitude : stepsize);
-
+		q_new.cost = nodes[neighbor_node_idx].cost + (reached ? magnitude : stepsize);
 
 	// if outside of map
     if (!isConfigWithinBounds(q_new.joint_comb, numofDOFs, x_size, y_size)) {
         delete[] q_new.joint_comb;
         return TRAPPED;
     }
-
     //check both the configuration, transition path
     if (IsValidArmConfiguration(q_new.joint_comb, numofDOFs, map, x_size, y_size) && 
         isValidStraightLinePath(nodes[neighbor_node_idx].joint_comb, q_new.joint_comb, numofDOFs, map, x_size, y_size)) {
@@ -740,7 +735,7 @@ static void planner(
 			connect_goal_idx = 0;
 		} else {
 			for (int k = 0; k < K && !connection; k++) {
-				// Define trees - Swap trees in each iteration
+				//define trees & swapping
 				std::vector<Node>& tree_a = (k % 2 == 0) ? nodes_init : nodes_goal;
 				std::vector<Node>& tree_b = (k % 2 == 0) ? nodes_goal : nodes_init;
 				
@@ -959,6 +954,10 @@ static void planner(
 							goal_reached = true;
 							best_cost = potential_goal_cost;
 							std::cout << "Found a path to goal with cost: " << best_cost << std::endl;
+
+							////// FOR EXTRA CREDIT ONLY
+							// break;
+							//////
 						}
 					}
 				}
