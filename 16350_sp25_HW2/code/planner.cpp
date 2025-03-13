@@ -695,10 +695,10 @@ static void planner(
 
 		std::cout << "Path before shortcut: " << path.size() << " points" << std::endl;
 
-		if (shortcut) {
-			shortcutPath(path, numofDOFs, map, x_size, y_size, stepsize);
-			std::cout << "Path after shortcut: " << path.size() << " points" << std::endl;
-		}
+		// if (shortcut) {
+		// 	shortcutPath(path, numofDOFs, map, x_size, y_size, stepsize);
+		// 	std::cout << "Path after shortcut: " << path.size() << " points" << std::endl;
+		// }
 		
 		allocatePlanMemory(plan, planlength, path, numofDOFs);
 		std::cout << "Path length: " << path.size() << std::endl;
