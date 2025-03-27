@@ -9,6 +9,12 @@
 #include <algorithm>
 #include <stdexcept>
 
+//I added
+#include <queue>
+#include <vector>
+#include <functional>
+#include <chrono>
+
 #define SYMBOLS 0
 #define INITIAL 1
 #define GOAL 2
@@ -400,6 +406,21 @@ public:
         cout << "***** Environment Created! *****" << endl;
         return os;
     }
+    // I added
+    const unordered_set<GroundedCondition, GroundedConditionHasher, GroundedConditionComparator>& 
+    get_initial_conditions() const {
+        return this->initial_conditions;
+    }
+
+    const unordered_set<GroundedCondition, GroundedConditionHasher, GroundedConditionComparator>& 
+    get_goal_conditions() const {
+        return this->goal_conditions;
+    }
+
+    const unordered_set<Action, ActionHasher, ActionComparator>& 
+    get_actions() const {
+        return this->actions;
+}
 };
 
 class GroundedAction
@@ -748,27 +769,217 @@ Env* create_env(char* filename)
 }
 
 list<GroundedAction> planner(Env* env) {
-    // This implementation creates a domain-independent symbolic planner
-    // using A* search with a goal-counting heuristic
+    // Define a state as a set of grounded conditions 
+    /// for quick look up
+    //// what is typedef
+    typedef unordered_set<GroundedCondition, GroundedConditionHasher, GroundedConditionComparator> State;
     
-    // State representation: set of grounded conditions
-    using State = unordered_set<GroundedCondition, GroundedConditionHasher, GroundedConditionComparator>;
-    
-    // Define state hash function for unordered_set
-    struct StateHasher {
-        size_t operator()(const State& state) const {
-            size_t seed = 0;
-            for (const auto& cond : state) {
-                seed ^= hash<string>{}(cond.toString()) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-            }
-            return seed;
+    // State Node
+    struct Node {
+        State state;
+        list<GroundedAction> actions_so_far;
+        int g_cost; // cost
+        int h_cost; // heuristic
+        int f_cost; // g_cost + h_cost
+        
+        // Used for priority queue comparison
+        bool operator>(const Node& other) const {
+            return f_cost > other.f_cost;
         }
     };
     
-    // Define state comparator for unordered_set
+    // Initial State
+    State initial_state;
+    for (const auto& condition : env->get_initial_conditions()) {
+        initial_state.insert(condition);
+    }
+    
+    // Goal State
+    unordered_set<GroundedCondition, GroundedConditionHasher, GroundedConditionComparator> goal_conditions;
+    for (const auto& goal : env->get_goal_conditions()) {
+        goal_conditions.insert(goal);
+    }
+    
+    // Check if state satisfies goal conditions
+    auto is_goal_state = [&goal_conditions](const State& state) {
+        for (const auto& goal : goal_conditions) {
+            if (state.find(goal) == state.end()) {
+                return false;
+            }
+        }
+        return true;
+    };
+    
+    // Heuristic function: count unsatisfied goals
+    auto calculate_heuristic = [&goal_conditions](const State& state) {
+        int unsatisfied = 0;
+        for (const auto& goal : goal_conditions) {
+            if (state.find(goal) == state.end()) {
+                unsatisfied++;
+            }
+        }
+        return unsatisfied;
+    };
+    
+    // Generate ground actions from a parametrized action
+    auto ground_action = [&env](const Action& action, const vector<string>& values, const vector<int>& indices) {
+        list<string> arg_values;
+        auto args = action.get_args();
+        auto args_it = args.begin();
+        
+        // Map action parameters to values
+        unordered_map<string, string> param_map;
+        for (size_t i = 0; i < indices.size(); i++) {
+            param_map[*args_it] = values[indices[i]];
+            args_it++;
+        }
+        
+        // Create argument list with concrete values
+        for (const auto& arg : args) {
+            arg_values.push_back(param_map[arg]);
+        }
+        
+        return GroundedAction(action.get_name(), arg_values);
+    };
+    
+    // Ground a condition using parameter mapping
+    auto ground_condition = [](const Condition& cond, const unordered_map<string, string>& param_map) {
+        list<string> arg_values;
+        for (const auto& arg : cond.get_args()) {
+            // If arg is a parameter, replace with concrete value
+            if (param_map.find(arg) != param_map.end()) {
+                arg_values.push_back(param_map.at(arg));
+            } else {
+                // Arg is already a concrete value
+                arg_values.push_back(arg);
+            }
+        }
+        return GroundedCondition(cond.get_predicate(), arg_values, cond.get_truth());
+    };
+    
+    // Generate all possible ground actions
+    auto get_applicable_actions = [&env, &ground_action, &ground_condition](const State& state) {
+        vector<GroundedAction> applicable_actions;
+        
+        // Get all symbols (objects) from environment
+        vector<string> symbols(env->get_symbols().begin(), env->get_symbols().end());
+        
+        // For each action definition
+        for (const Action& action : env->get_actions()) {
+            auto args = action.get_args();
+            int num_args = args.size();
+            
+            // Generate all possible combinations of argument values
+            vector<vector<int>> indices_list;
+            function<void(vector<int>&, int)> generate_indices = [&](vector<int>& indices, int arg_index) {
+                if (arg_index == num_args) {
+                    indices_list.push_back(indices);
+                    return;
+                }
+                
+                for (int i = 0; i < symbols.size(); i++) {
+                    indices.push_back(i);
+                    generate_indices(indices, arg_index + 1);
+                    indices.pop_back();
+                }
+            };
+            
+            vector<int> indices;
+            generate_indices(indices, 0);
+            
+            // For each possible ground action
+            for (const auto& indices : indices_list) {
+                // Create mapping from parameters to concrete values
+                unordered_map<string, string> param_map;
+                auto args_it = args.begin();
+                for (int i = 0; i < indices.size(); i++) {
+                    param_map[*args_it] = symbols[indices[i]];
+                    args_it++;
+                }
+                
+                // Check if all preconditions are satisfied
+                bool applicable = true;
+                for (const auto& precond : action.get_preconditions()) {
+                    GroundedCondition gc = ground_condition(precond, param_map);
+                    if (gc.get_truth()) {
+                        // Positive condition must be present
+                        if (state.find(gc) == state.end()) {
+                            applicable = false;
+                            break;
+                        }
+                    } else {
+                        // Negative condition must be absent
+                        GroundedCondition positive_gc(gc.get_predicate(), gc.get_arg_values(), true);
+                        if (state.find(positive_gc) != state.end()) {
+                            applicable = false;
+                            break;
+                        }
+                    }
+                }
+                
+                if (applicable) {
+                    applicable_actions.push_back(ground_action(action, symbols, indices));
+                }
+            }
+        }
+        
+        return applicable_actions;
+    };
+    
+    // Apply action effects to a state
+    auto apply_action = [&env, &ground_condition](const State& state, const GroundedAction& gaction) {
+        State new_state = state;
+        
+        // Find the action definition
+        Action action = env->get_action(gaction.get_name());
+        
+        // Create mapping from parameters to concrete values
+        unordered_map<string, string> param_map;
+        auto args = action.get_args();
+        auto args_it = args.begin();
+        auto values = gaction.get_arg_values();
+        auto values_it = values.begin();
+        
+        while (args_it != args.end() && values_it != values.end()) {
+            param_map[*args_it] = *values_it;
+            args_it++;
+            values_it++;
+        }
+        
+        // Apply effects
+        for (const auto& effect : action.get_effects()) {
+            GroundedCondition gc = ground_condition(effect, param_map);
+            
+            if (gc.get_truth()) {
+                // Add positive effect
+                new_state.insert(gc);
+            } else {
+                // Remove negative effect (remove the positive version)
+                GroundedCondition positive_gc(gc.get_predicate(), gc.get_arg_values(), true);
+                new_state.erase(positive_gc);
+            }
+        }
+        
+        return new_state;
+    };
+    
+    // Hash function for states
+    struct StateHasher {
+        size_t operator()(const State& state) const {
+            size_t hash_val = 0;
+            for (const auto& cond : state) {
+                hash_val ^= GroundedConditionHasher()(cond);
+            }
+            return hash_val;
+        }
+    };
+    
+    // Equality comparison for states
     struct StateComparator {
         bool operator()(const State& lhs, const State& rhs) const {
-            if (lhs.size() != rhs.size()) return false;
+            if (lhs.size() != rhs.size()) {
+                return false;
+            }
             
             for (const auto& cond : lhs) {
                 if (rhs.find(cond) == rhs.end()) {
@@ -780,136 +991,94 @@ list<GroundedAction> planner(Env* env) {
         }
     };
     
-    // Node in search tree
-    struct Node {
-        State state;
-        vector<GroundedAction> plan;
-        int cost;
-        int heuristic;
+    // A* 
+    priority_queue<Node, vector<Node>, greater<Node>> open_list;
+    
+    // Visited
+    unordered_set<State, StateHasher, StateComparator> closed_set;
+    
+    // Create initial node
+    Node initial_node;
+    initial_node.state = initial_state;
+    initial_node.actions_so_far = {};
+    initial_node.g_cost = 0;
+    initial_node.h_cost = calculate_heuristic(initial_state);
+    initial_node.f_cost = initial_node.g_cost + initial_node.h_cost;
+    
+    // Add initial node to open list
+    open_list.push(initial_node);
+    
+    // Track states expanded
+    int states_expanded = 0;
+    
+    // Start timing
+    auto start_time = chrono::high_resolution_clock::now();
+    
+    // A* search
+    while (!open_list.empty()) {
+        // Get node with lowest f_cost
+        Node current = open_list.top();
+        open_list.pop();
         
-        Node(const State& s, const vector<GroundedAction>& p, int c, int h)
-            : state(s), plan(p), cost(c), heuristic(h) {}
+        // Check if we've already processed this state
+        if (closed_set.find(current.state) != closed_set.end()) {
+            continue;
+        }
+        
+        // Add to closed set
+        closed_set.insert(current.state);
+        states_expanded++;
+        
+        // Check if goal reached
+        if (is_goal_state(current.state)) {
+            auto end_time = chrono::high_resolution_clock::now();
+            auto duration = chrono::duration_cast<chrono::milliseconds>(end_time - start_time).count();
             
-        int f_cost() const { return cost + heuristic; }
-    };
-    
-    // Extract all actions and initial conditions
-    auto actions = env->actions;
-    auto initial_conditions = env->initial_conditions;
-    auto goal_conditions = env->goal_conditions;
-    
-    // If we can't access these directly, we need to extract them through other means
-    // Since the API is not fully shown, let's assume we have access for now
-    
-    // Start with the initial state
-    State initial_state;
-    for (const auto& cond : initial_conditions) {
-        initial_state.insert(cond);
+            if (print_status) {
+                cout << "Goal reached!" << endl;
+                cout << "States expanded: " << states_expanded << endl;
+                cout << "Plan length: " << current.actions_so_far.size() << endl;
+                cout << "Time taken: " << duration << " ms" << endl;
+            }
+            
+            return current.actions_so_far;
+        }
+        
+        // Get applicable actions for current state
+        vector<GroundedAction> applicable_actions = get_applicable_actions(current.state);
+        
+        // Generate successor states
+        for (const auto& action : applicable_actions) {
+            // Apply action to get new state
+            State new_state = apply_action(current.state, action);
+            
+            // Skip if already visited
+            if (closed_set.find(new_state) != closed_set.end()) {
+                continue;
+            }
+            
+            // Create new node
+            Node new_node;
+            new_node.state = new_state;
+            new_node.actions_so_far = current.actions_so_far;
+            new_node.actions_so_far.push_back(action);
+
+            new_node.g_cost = current.g_cost + 1;  // Each action costs 1
+            new_node.h_cost = calculate_heuristic(new_state);
+            new_node.f_cost = new_node.g_cost + new_node.h_cost;
+            
+            // Add to open list
+            open_list.push(new_node);
+        }
     }
-    
-    // Goal test function
-    auto is_goal = [&goal_conditions](const State& state) -> bool {
-        for (const auto& goal : goal_conditions) {
-            if (goal.get_truth()) {
-                // For positive goals, check if they exist in the state
-                if (state.find(goal) == state.end()) {
-                    return false;
-                }
-            } else {
-                // For negative goals, check if they don't exist in the state
-                GroundedCondition positive_goal(goal.get_predicate(), goal.get_arg_values(), true);
-                if (state.find(positive_goal) != state.end()) {
-                    return false;
-                }
-            }
-        }
-        return true;
-    };
-    
-    // Heuristic: count unsatisfied goals
-    auto heuristic = [&goal_conditions](const State& state) -> int {
-        int count = 0;
-        for (const auto& goal : goal_conditions) {
-            if (goal.get_truth()) {
-                if (state.find(goal) == state.end()) {
-                    count++;
-                }
-            } else {
-                GroundedCondition positive_goal(goal.get_predicate(), goal.get_arg_values(), true);
-                if (state.find(positive_goal) != state.end()) {
-                    count++;
-                }
-            }
-        }
-        return count;
-    };
-    
-    // Generate all possible groundings for an action
-    auto generate_groundings = [&env](const Action& action) -> vector<GroundedAction> {
-        vector<GroundedAction> groundings;
-        
-        // Get all symbols from environment
-        unordered_set<string> symbols = env->get_symbols();
-        
-        // Get action parameters
-        list<string> params = action.get_args();
-        
-        // Recursive function to generate all possible parameter combinations
-        function<void(list<string>, list<string>::iterator, list<string>)> generate;
-        generate = [&](list<string> params, list<string>::iterator param_it, list<string> current_values) {
-            if (param_it == params.end()) {
-                // We have a complete parameter assignment
-                groundings.push_back(GroundedAction(action.get_name(), current_values));
-                return;
-            }
-            
-            // Try each symbol for the current parameter
-            for (const auto& symbol : symbols) {
-                list<string> new_values = current_values;
-                new_values.push_back(symbol);
-                generate(params, next(param_it), new_values);
-            }
-        };
-        
-        generate(params, params.begin(), {});
-        return groundings;
-    };
-    
-    // Check if a grounded action is applicable in the current state
-    auto is_applicable = [](const State& state, const GroundedAction& g_action, const Action& action) -> bool {
-        // Map parameters to values
-        unordered_map<string, string> param_map;
-        auto param_names = action.get_args();
-        auto param_values = g_action.get_arg_values();
-        
-        auto name_it = param_names.begin();
-        auto value_it = param_values.begin();
-        
-        while (name_it != param_names.end() && value_it != param_values.end()) {
-            param_map[*name_it] = *value_it;
-            ++name_it;
-            ++value_it;
-        }
-        
-        // Check each precondition
-        for (const auto& precond : action.get_preconditions()) {
-            // Ground the precondition with our parameter values
-            list<string> grounded_args;
-            for (const auto& arg : precond.get_args()) {
-                if (param_map.find(arg) != param_map.end()) {
-                    grounded_args.push_back(param_map[arg]);
-                } else {
-                    // Constant
-                    grounded_args.push_back(arg);
-                }
-            }
-            
-            GroundedCondition g_precond(precond.get_predicate(), grounded_args, precond.get_truth());
-            
-            // Check if the precondition holds in the state
-            if (precond.get_truth()) {
-                // Positive precondition
-                if (state.find(g_precond) == state.end())
+
+    // Goal not reached
+    cout << "Failed: Goal not reached";
+    return {};
+}
+
+
+
 
 int main(int argc, char* argv[])
 {
