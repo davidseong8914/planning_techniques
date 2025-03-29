@@ -406,6 +406,7 @@ public:
         cout << "***** Environment Created! *****" << endl;
         return os;
     }
+
     // I added
     const unordered_set<GroundedCondition, GroundedConditionHasher, GroundedConditionComparator>& 
     get_initial_conditions() const {
@@ -768,26 +769,53 @@ Env* create_env(char* filename)
     return env;
 }
 
-list<GroundedAction> planner(Env* env) {
-    // Define a state as a set of grounded conditions 
-    /// for quick look up
-    //// what is typedef
-    typedef unordered_set<GroundedCondition, GroundedConditionHasher, GroundedConditionComparator> State;
-    
-    // State Node
-    struct Node {
-        State state;
-        list<GroundedAction> actions_so_far;
-        int g_cost; // cost
-        int h_cost; // heuristic
-        int f_cost; // g_cost + h_cost
-        
-        // Used for priority queue comparison
-        bool operator>(const Node& other) const {
-            return f_cost > other.f_cost;
+
+//////////////////////
+/// Implementation ///
+//////////////////////
+
+
+// State definition
+/// quick look up
+typedef unordered_set<GroundedCondition, GroundedConditionHasher, GroundedConditionComparator> State;
+
+// State hashing and comparison functions
+struct StateHasher {
+    size_t operator()(const State& state) const {
+        size_t hash_val = 0;
+        for (const auto& cond : state) {
+            hash_val ^= GroundedConditionHasher()(cond);
         }
-    };
+        return hash_val;
+    }
+};
+
+struct StateComparator {
+    bool operator()(const State& lhs, const State& rhs) const {
+        if (lhs.size() != rhs.size()) return false;
+        for (const auto& cond : lhs) {
+            if (rhs.find(cond) == rhs.end()) return false;
+        }
+        return true;
+    }
+};
+
+// State Node
+struct Node {
+    State state;
+    list<GroundedAction> actions_so_far;
+    int g_cost; // cost
+    int h_cost; // heuristic
+    int f_cost; // g_cost + h_cost
     
+    // Used for priority queue comparison
+    bool operator>(const Node& other) const {
+        return f_cost > other.f_cost;
+    }
+};
+
+list<GroundedAction> planner(Env* env) {
+
     // Initial State
     State initial_state;
     for (const auto& condition : env->get_initial_conditions()) {
@@ -827,14 +855,12 @@ list<GroundedAction> planner(Env* env) {
         auto args = action.get_args();
         auto args_it = args.begin();
         
-        // Map action parameters to values
         unordered_map<string, string> param_map;
         for (size_t i = 0; i < indices.size(); i++) {
             param_map[*args_it] = values[indices[i]];
             args_it++;
         }
         
-        // Create argument list with concrete values
         for (const auto& arg : args) {
             arg_values.push_back(param_map[arg]);
         }
@@ -846,11 +872,9 @@ list<GroundedAction> planner(Env* env) {
     auto ground_condition = [](const Condition& cond, const unordered_map<string, string>& param_map) {
         list<string> arg_values;
         for (const auto& arg : cond.get_args()) {
-            // If arg is a parameter, replace with concrete value
             if (param_map.find(arg) != param_map.end()) {
                 arg_values.push_back(param_map.at(arg));
             } else {
-                // Arg is already a concrete value
                 arg_values.push_back(arg);
             }
         }
@@ -860,23 +884,18 @@ list<GroundedAction> planner(Env* env) {
     // Generate all possible ground actions
     auto get_applicable_actions = [&env, &ground_action, &ground_condition](const State& state) {
         vector<GroundedAction> applicable_actions;
-        
-        // Get all symbols (objects) from environment
         vector<string> symbols(env->get_symbols().begin(), env->get_symbols().end());
         
-        // For each action definition
         for (const Action& action : env->get_actions()) {
             auto args = action.get_args();
             int num_args = args.size();
             
-            // Generate all possible combinations of argument values
             vector<vector<int>> indices_list;
             function<void(vector<int>&, int)> generate_indices = [&](vector<int>& indices, int arg_index) {
                 if (arg_index == num_args) {
                     indices_list.push_back(indices);
                     return;
                 }
-                
                 for (int i = 0; i < symbols.size(); i++) {
                     indices.push_back(i);
                     generate_indices(indices, arg_index + 1);
@@ -889,7 +908,6 @@ list<GroundedAction> planner(Env* env) {
             
             // For each possible ground action
             for (const auto& indices : indices_list) {
-                // Create mapping from parameters to concrete values
                 unordered_map<string, string> param_map;
                 auto args_it = args.begin();
                 for (int i = 0; i < indices.size(); i++) {
@@ -897,18 +915,16 @@ list<GroundedAction> planner(Env* env) {
                     args_it++;
                 }
                 
-                // Check if all preconditions are satisfied
+                // Check if preconditions are satisfied
                 bool applicable = true;
                 for (const auto& precond : action.get_preconditions()) {
                     GroundedCondition gc = ground_condition(precond, param_map);
                     if (gc.get_truth()) {
-                        // Positive condition must be present
                         if (state.find(gc) == state.end()) {
                             applicable = false;
                             break;
                         }
                     } else {
-                        // Negative condition must be absent
                         GroundedCondition positive_gc(gc.get_predicate(), gc.get_arg_values(), true);
                         if (state.find(positive_gc) != state.end()) {
                             applicable = false;
@@ -926,14 +942,11 @@ list<GroundedAction> planner(Env* env) {
         return applicable_actions;
     };
     
-    // Apply action effects to a state
+    // Apply action 
     auto apply_action = [&env, &ground_condition](const State& state, const GroundedAction& gaction) {
         State new_state = state;
-        
-        // Find the action definition
         Action action = env->get_action(gaction.get_name());
         
-        // Create mapping from parameters to concrete values
         unordered_map<string, string> param_map;
         auto args = action.get_args();
         auto args_it = args.begin();
@@ -949,12 +962,9 @@ list<GroundedAction> planner(Env* env) {
         // Apply effects
         for (const auto& effect : action.get_effects()) {
             GroundedCondition gc = ground_condition(effect, param_map);
-            
             if (gc.get_truth()) {
-                // Add positive effect
                 new_state.insert(gc);
             } else {
-                // Remove negative effect (remove the positive version)
                 GroundedCondition positive_gc(gc.get_predicate(), gc.get_arg_values(), true);
                 new_state.erase(positive_gc);
             }
@@ -962,42 +972,17 @@ list<GroundedAction> planner(Env* env) {
         
         return new_state;
     };
-    
-    // Hash function for states
-    struct StateHasher {
-        size_t operator()(const State& state) const {
-            size_t hash_val = 0;
-            for (const auto& cond : state) {
-                hash_val ^= GroundedConditionHasher()(cond);
-            }
-            return hash_val;
-        }
-    };
-    
-    // Equality comparison for states
-    struct StateComparator {
-        bool operator()(const State& lhs, const State& rhs) const {
-            if (lhs.size() != rhs.size()) {
-                return false;
-            }
-            
-            for (const auto& cond : lhs) {
-                if (rhs.find(cond) == rhs.end()) {
-                    return false;
-                }
-            }
-            
-            return true;
-        }
-    };
-    
+
+
+    ////////////////// PLANNING //////////////////
+
     // A* 
     priority_queue<Node, vector<Node>, greater<Node>> open_list;
     
     // Visited
     unordered_set<State, StateHasher, StateComparator> closed_set;
     
-    // Create initial node
+    // initialize initial node
     Node initial_node;
     initial_node.state = initial_state;
     initial_node.actions_so_far = {};
@@ -1005,31 +990,30 @@ list<GroundedAction> planner(Env* env) {
     initial_node.h_cost = calculate_heuristic(initial_state);
     initial_node.f_cost = initial_node.g_cost + initial_node.h_cost;
     
-    // Add initial node to open list
+    // add initial node
     open_list.push(initial_node);
     
-    // Track states expanded
+    // explanded states
     int states_expanded = 0;
-    
-    // Start timing
+    // time
     auto start_time = chrono::high_resolution_clock::now();
     
-    // A* search
+    // A* 
     while (!open_list.empty()) {
-        // Get node with lowest f_cost
+        // get lowest f option
         Node current = open_list.top();
         open_list.pop();
         
-        // Check if we've already processed this state
+        // check is visited
         if (closed_set.find(current.state) != closed_set.end()) {
             continue;
         }
         
-        // Add to closed set
+        // add to closed
         closed_set.insert(current.state);
         states_expanded++;
         
-        // Check if goal reached
+        // check for goal
         if (is_goal_state(current.state)) {
             auto end_time = chrono::high_resolution_clock::now();
             auto duration = chrono::duration_cast<chrono::milliseconds>(end_time - start_time).count();
@@ -1043,41 +1027,37 @@ list<GroundedAction> planner(Env* env) {
             
             return current.actions_so_far;
         }
-        
-        // Get applicable actions for current state
+
+        // query applicable actions
         vector<GroundedAction> applicable_actions = get_applicable_actions(current.state);
         
-        // Generate successor states
+        // iterate applicable actions
         for (const auto& action : applicable_actions) {
-            // Apply action to get new state
             State new_state = apply_action(current.state, action);
             
-            // Skip if already visited
+            // skip visited
             if (closed_set.find(new_state) != closed_set.end()) {
                 continue;
             }
             
-            // Create new node
+            // add to open list
             Node new_node;
             new_node.state = new_state;
             new_node.actions_so_far = current.actions_so_far;
             new_node.actions_so_far.push_back(action);
 
-            new_node.g_cost = current.g_cost + 1;  // Each action costs 1
+            new_node.g_cost = current.g_cost + 1;  // action cost + 1
             new_node.h_cost = calculate_heuristic(new_state);
             new_node.f_cost = new_node.g_cost + new_node.h_cost;
             
-            // Add to open list
             open_list.push(new_node);
         }
     }
 
-    // Goal not reached
+    // failed
     cout << "Failed: Goal not reached";
     return {};
 }
-
-
 
 
 int main(int argc, char* argv[])
